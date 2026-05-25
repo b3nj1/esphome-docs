@@ -1,6 +1,9 @@
 ---
 description: "Instructions for setting up framed_rs485 sensors."
 title: "Framed RS-485 Sensor"
+params:
+  seo:
+    description: Instructions for setting up framed_rs485 sensors to decode numeric values from a DLE-framed RS-485 bus.
 ---
 
 The `framed_rs485` sensor platform reads numeric values from a DLE-framed RS-485 bus.
@@ -33,7 +36,7 @@ It requires the [Framed RS-485](/components/framed_rs485/) hub to be configured.
   | `queue_depth` | — | Current TX queue depth. |
 
 - **offset** (*Optional*, integer): Payload byte index for raw integer decoders. Defaults to `0`.
-- **temperature_label** (*Optional*, string): Substring to match in display text for `display_temperature`. Case-insensitive. Defaults to `""` (matches any number with a temperature unit nearby).
+- **temperature_label** (*Optional*, string): Substring to match in display text for `display_temperature`. Case-insensitive. The first temperature digit found **after** the label position is returned, so `temperature_label: pool` correctly returns `84` from `"Air 68F Pool 84F"`. Defaults to `""` (returns the first temperature digit found anywhere in the text).
 - **lambda** (*Optional*, [lambda](/guides/automations#lambda)): Custom decode function. Overrides `decode` when present.
   Signature: `optional<float>(const std::vector<uint8_t> &payload)`. Return `{}` to publish nothing.
 

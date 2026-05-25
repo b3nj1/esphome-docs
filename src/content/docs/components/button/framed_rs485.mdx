@@ -1,19 +1,41 @@
 ---
 description: "Instructions for setting up framed_rs485 buttons."
 title: "Framed RS-485 Button"
+params:
+  seo:
+    description: Instructions for setting up framed_rs485 buttons to send key commands on a DLE-framed RS-485 bus.
 ---
 
 The `framed_rs485` button platform sends a key command onto a DLE-framed RS-485
 bus when pressed. It requires the [Framed RS-485](/components/framed_rs485/) hub to be configured.
 
-Commands are queued and transmitted during the next TX gate window (typically the
-controller's keep-alive frame). The controller decides the resulting state — the
-ESP32 cannot know until it reads the next LED frame.
+## How commands work
+
+Each button corresponds to a **key code** — a 32-bit value that identifies which
+physical button was pressed on the original controller panel. When you press the
+button in Home Assistant, the ESP32 queues the key frame and transmits it during
+the next TX gate window (typically the controller's keep-alive frame, around
+every 500 ms for Hayward AquaLogic).
+
+The controller receives the key event and decides what happens next. The ESP32
+cannot know the outcome until it reads the next LED status frame, which is why
+commands are modelled as buttons rather than switches.
+
+### Finding command values
+
+Known command values for Hayward AquaLogic and Jandy AquaLink RS are listed in the
+[framed\_rs485-examples](https://github.com/b3nj1/framed_rs485-examples) repository
+and were confirmed from live bus captures. Each value is controller-wiring-dependent
+for AUX outputs — rename and verify against your physical panel.
+
+To find new command values, enable `dump_frames: true` and `sniffer_only: true` on
+the hub, press a physical button on the controller panel, and watch for a new frame
+type (typically `0x0083` for Hayward wireless) in the ESP log.
 
 ## Configuration variables
 
 - **framed_rs485_id** (**Required**, [ID](/guides/configuration-types#id)): The ID of the `framed_rs485` hub.
-- **command** (**Required**, hex uint32): The 32-bit command value to send (e.g. `0x00010000`).
+- **command** (**Required**, hex uint32): The 32-bit key code to send (e.g. `0x00010000`). The encoding is key-format-specific: for Hayward wireless, this is a bitmask where each bit maps to one physical button.
 
 All other options from [Button](/components/button/#base-button-configuration).
 
@@ -24,10 +46,27 @@ button:
   - platform: framed_rs485
     framed_rs485_id: pool
     name: "Pool Lights"
-    command: 0x00010000
+    command: 0x00010000  # confirmed from bus capture
 
   - platform: framed_rs485
     framed_rs485_id: pool
     name: "Filter"
     command: 0x80000000
+
+  - platform: framed_rs485
+    framed_rs485_id: pool
+    name: "Pool/Spa Mode"
+    command: 0x40000000
+```
+
+Use the corresponding LED binary sensors to read the actual resulting state:
+
+```yaml
+binary_sensor:
+  - platform: framed_rs485
+    framed_rs485_id: pool
+    name: "Filter LED"
+    frame_type: [0x01, 0x02]
+    decode: led_bit
+    bit: 5
 ```
