@@ -1,0 +1,90 @@
+---
+description: "Instructions for setting up framed_rs485 sensors."
+title: "Framed RS-485 Sensor"
+---
+
+The `framed_rs485` sensor platform reads numeric values from a DLE-framed RS-485 bus.
+It requires the [Framed RS-485](/components/framed_rs485/) hub to be configured.
+
+## Configuration variables
+
+- **framed_rs485_id** (**Required**, [ID](/guides/configuration-types#id)): The ID of the `framed_rs485` hub.
+- **frame_type** (**Required**, list of hex bytes): Two-byte frame type prefix to match. Use `[]` to match every frame.
+- **decode** (*Optional*, string): Built-in decoder. Defaults to `uint8`.
+
+  | decode | Required extras | Description |
+  |---|---|---|
+  | `uint8` | `offset` | Unsigned 8-bit value at payload byte `offset`. |
+  | `uint16_be` | `offset` | Unsigned 16-bit big-endian value at bytes `offset`..`offset+1`. |
+  | `uint16_le` | `offset` | Unsigned 16-bit little-endian value at bytes `offset`..`offset+1`. |
+  | `uint32_be` | `offset` | Unsigned 32-bit big-endian value at bytes `offset`..`offset+3`. |
+  | `uint32_le` | `offset` | Unsigned 32-bit little-endian value at bytes `offset`..`offset+3`. |
+  | `bcd` | `offset` | BCD-encoded byte at payload byte `offset`. |
+  | `led_mask` | — | 32-bit current (solid) LED mask. Use with `frame_type: [0x01, 0x02]`. |
+  | `led_mask_blinking` | — | 32-bit blinking LED mask. Use with `frame_type: [0x01, 0x02]`. |
+  | `display_temperature` | `temperature_label` | Extracts a number from display text where the text contains `temperature_label` (case-insensitive). Use with `frame_type: [0x01, 0x03]`. |
+  | `vsp_speed_request` | — | VSP pump speed percent from frame `0x0c 0x01`. |
+  | `vsp_power_bcd` | — | VSP watts (BCD) from frame `0x00 0x0c`. |
+  | `frames_received` | — | Running count of validated frames received. |
+  | `crc_failures` | — | Running count of CRC failures. |
+  | `commands_sent` | — | Running count of TX frames sent. |
+  | `command_drops` | — | Running count of dropped commands. |
+  | `last_keepalive_ms` | — | Interval between the two most recent gate frames in ms. |
+  | `queue_depth` | — | Current TX queue depth. |
+
+- **offset** (*Optional*, integer): Payload byte index for raw integer decoders. Defaults to `0`.
+- **temperature_label** (*Optional*, string): Substring to match in display text for `display_temperature`. Case-insensitive. Defaults to `""` (matches any number with a temperature unit nearby).
+- **lambda** (*Optional*, [lambda](/guides/automations#lambda)): Custom decode function. Overrides `decode` when present.
+  Signature: `optional<float>(const std::vector<uint8_t> &payload)`. Return `{}` to publish nothing.
+
+All other options from [Sensor](/components/sensor/#base-sensor-configuration).
+
+## Example
+
+```yaml
+sensor:
+  - platform: framed_rs485
+    framed_rs485_id: pool
+    name: "Pool Temperature"
+    frame_type: [0x01, 0x03]
+    decode: display_temperature
+    temperature_label: pool
+    unit_of_measurement: "°F"
+    device_class: temperature
+    accuracy_decimals: 0
+    filters:
+      - throttle: 10s
+
+  - platform: framed_rs485
+    framed_rs485_id: pool
+    name: "Frames Received"
+    frame_type: []
+    decode: frames_received
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    filters:
+      - throttle: 30s
+
+  - platform: framed_rs485
+    framed_rs485_id: pool
+    name: "SWG Salt PPM"
+    frame_type: [0x00, 0x16]
+    lambda: |-
+      if (payload.size() < 3) return {};
+      return float(payload[2]) * 100.0f;
+    unit_of_measurement: ppm
+    accuracy_decimals: 0
+```
+
+## Rate limiting
+
+`publish_state` is called on every matching frame. For sensors that fire at bus
+frequency (~10 Hz), use ESPHome `filters:` to reduce network traffic:
+
+```yaml
+filters:
+  - throttle: 30s
+```
+
+Use `heartbeat` instead of `throttle` if you need the most-recent value delivered
+on the next poll rather than simply dropping updates.

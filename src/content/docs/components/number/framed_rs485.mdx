@@ -1,0 +1,40 @@
+---
+description: "Instructions for setting up framed_rs485 number entities."
+title: "Framed RS-485 Number"
+---
+
+The `framed_rs485` number platform sends a raw frame payload onto a DLE-framed
+RS-485 bus when the value changes. It requires the [Framed RS-485](/components/framed_rs485/)
+hub to be configured.
+
+Use this platform when you need to send a numeric value as a custom-encoded
+payload (e.g., a VSP pump speed percent) that cannot be expressed as a fixed
+key command.
+
+## Configuration variables
+
+- **framed_rs485_id** (**Required**, [ID](/guides/configuration-types#id)): The ID of the `framed_rs485` hub.
+- **min_value** (**Required**, float): Minimum allowed value.
+- **max_value** (**Required**, float): Maximum allowed value.
+- **step** (**Required**, float): Step size.
+- **lambda** (**Required**, [lambda](/guides/automations#lambda)): Encodes the numeric value into a raw payload.
+  Signature: `optional<std::vector<uint8_t>>(float value)`. Return `{}` to send nothing.
+  The returned bytes are wrapped in DLE framing and CRC by the hub before transmission.
+
+All other options from [Number](/components/number/#base-number-configuration).
+
+## Example
+
+```yaml
+number:
+  - platform: framed_rs485
+    framed_rs485_id: pool
+    name: "VSP Speed"
+    min_value: 0
+    max_value: 100
+    step: 1
+    unit_of_measurement: "%"
+    lambda: |-
+      uint8_t pct = static_cast<uint8_t>(value);
+      return std::vector<uint8_t>{0x0c, 0x01, 0x00, pct};
+```

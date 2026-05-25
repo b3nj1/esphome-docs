@@ -1,0 +1,57 @@
+---
+description: "Instructions for setting up framed_rs485 text sensors."
+title: "Framed RS-485 Text Sensor"
+---
+
+The `framed_rs485` text sensor platform reads string values from a DLE-framed
+RS-485 bus. It requires the [Framed RS-485](/components/framed_rs485/) hub to be configured.
+
+## Configuration variables
+
+- **framed_rs485_id** (**Required**, [ID](/guides/configuration-types#id)): The ID of the `framed_rs485` hub.
+- **frame_type** (**Required**, list of hex bytes): Two-byte frame type prefix to match. Use `[]` to match every frame.
+- **decode** (*Optional*, string): Built-in decoder. Defaults to `display_text`.
+
+  | decode | Description |
+  |---|---|
+  | `display_text` | Full display text with `°` substitution, null bytes stripped, and whitespace trimmed. High-bit blink flags are ignored — the same glyph appears whether it is blinking or solid. Use with `frame_type: [0x01, 0x03]`. |
+  | `display_blink_text` | Only the characters that are actively blinking (high bit set in the raw byte). Returns an empty string when nothing blinks. On AquaLogic controllers blinking text typically signals an alarm, a mode-change in progress, or a value being set. Use with `frame_type: [0x01, 0x03]`. |
+  | `last_frame_type` | Hex string of the two-byte frame type of the most recently received valid frame. Useful for cataloging an unknown bus. Use with `frame_type: []`. |
+
+- **lambda** (*Optional*, [lambda](/guides/automations#lambda)): Custom decode function. Overrides `decode` when present.
+  Signature: `optional<std::string>(const std::vector<uint8_t> &payload)`. Return `{}` to publish nothing.
+
+All other options from [Text Sensor](/components/text_sensor/#base-text-sensor-configuration).
+
+## Example
+
+```yaml
+text_sensor:
+  - platform: framed_rs485
+    framed_rs485_id: pool
+    name: "Pool Display"
+    frame_type: [0x01, 0x03]
+    decode: display_text
+
+  # Non-empty string when any character on the display is blinking.
+  # Automations can trigger on state != "" to detect alarms or mode changes.
+  - platform: framed_rs485
+    framed_rs485_id: pool
+    name: "Display Blink"
+    frame_type: [0x01, 0x03]
+    decode: display_blink_text
+
+  - platform: framed_rs485
+    framed_rs485_id: pool
+    name: "Last Frame Type"
+    frame_type: []
+    decode: last_frame_type
+    entity_category: diagnostic
+
+  - platform: framed_rs485
+    framed_rs485_id: pool
+    name: "Raw Payload"
+    frame_type: [0x00, 0x16]
+    lambda: |-
+      return std::string(payload.begin() + 2, payload.end());
+```
