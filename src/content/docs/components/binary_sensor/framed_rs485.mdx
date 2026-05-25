@@ -1,0 +1,67 @@
+---
+description: "Instructions for setting up framed_rs485 binary sensors."
+title: "Framed RS-485 Binary Sensor"
+---
+
+The `framed_rs485` binary sensor platform reads boolean values from a DLE-framed
+RS-485 bus. It requires the [Framed RS-485](/components/framed_rs485/) hub to be configured.
+
+## Configuration variables
+
+- **framed_rs485_id** (**Required**, [ID](/guides/configuration-types#id)): The ID of the `framed_rs485` hub.
+- **frame_type** (**Required**, list of hex bytes): Two-byte frame type prefix to match. Use `[]` to match every frame.
+- **decode** (*Optional*, string): Built-in decoder. One of:
+
+  - `led_bit` *(default)*: True when bit `bit` of the 32-bit current LED mask is set.
+  - `display_text_match`: Latching match against decoded display text. True when `match_on` is satisfied; false when `match_off` is satisfied or `timeout` expires. See below.
+
+- **bit** (*Optional*, integer): Which bit of the LED mask to test (0–31). Only for `led_bit` decode. Defaults to `0`.
+- **lambda** (*Optional*, [lambda](/guides/automations#lambda)): Custom decode function. Overrides `decode` when present.
+  Signature: `optional<bool>(const std::vector<uint8_t> &payload)`. Return `{}` to publish nothing.
+
+All other options from [Binary Sensor](/components/binary_sensor/#base-binary-sensor-configuration).
+
+## `display_text_match` options
+
+Because an AquaLogic display cycles through multiple screens, a simple per-frame
+match would flip back to `false` on every non-matching screen. `display_text_match`
+uses **latch semantics**: the sensor holds its last proven state until the opposite
+is proven or a timeout fires.
+
+Before matching, internal whitespace runs are collapsed to a single space so display
+centering padding is transparent. Matching is case-insensitive substring search.
+
+- **match_on** (**Required**, string or list of strings): Proof-positive condition. When all strings in the list appear in the current display text (AND logic), the sensor latches to `true`. A single string may be given without list notation.
+- **match_off** (*Optional*, string or list of strings): Proof-negative condition. When all strings in the list appear, the sensor latches to `false`. If omitted, `timeout` is the only way back to `false`.
+- **timeout** (*Optional*, [Time](/guides/configuration-types#time)): If no proof (positive or negative) is seen within this duration, revert to `false`. Set to 2–3× the display cycle period. Defaults to `0` (never expire). Has no effect until the sensor has seen at least one proof.
+
+## Example
+
+```yaml
+binary_sensor:
+  - platform: framed_rs485
+    framed_rs485_id: pool
+    name: "Filter LED"
+    frame_type: [0x01, 0x02]
+    decode: led_bit
+    bit: 5
+
+  # Heater mode is only visible on the display. match_on/match_off use lists
+  # so individual tokens narrow the match without requiring exact spacing.
+  - platform: framed_rs485
+    framed_rs485_id: pool
+    name: "Heater Auto Mode"
+    frame_type: [0x01, 0x03]
+    decode: display_text_match
+    match_on: ["Heater", "Auto"]
+    match_off: ["Heater", "Manual"]
+    timeout: 60s
+
+  - platform: framed_rs485
+    framed_rs485_id: pool
+    name: "Custom Flag"
+    frame_type: [0x12, 0x34]
+    lambda: |-
+      if (payload.size() < 3) return {};
+      return bool(payload[2] & 0x01);
+```

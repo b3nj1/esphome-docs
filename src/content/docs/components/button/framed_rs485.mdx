@@ -1,0 +1,33 @@
+---
+description: "Instructions for setting up framed_rs485 buttons."
+title: "Framed RS-485 Button"
+---
+
+The `framed_rs485` button platform sends a key command onto a DLE-framed RS-485
+bus when pressed. It requires the [Framed RS-485](/components/framed_rs485/) hub to be configured.
+
+Commands are queued and transmitted during the next TX gate window (typically the
+controller's keep-alive frame). The controller decides the resulting state — the
+ESP32 cannot know until it reads the next LED frame.
+
+## Configuration variables
+
+- **framed_rs485_id** (**Required**, [ID](/guides/configuration-types#id)): The ID of the `framed_rs485` hub.
+- **command** (**Required**, hex uint32): The 32-bit command value to send (e.g. `0x00010000`).
+
+All other options from [Button](/components/button/#base-button-configuration).
+
+## Example
+
+```yaml
+button:
+  - platform: framed_rs485
+    framed_rs485_id: pool
+    name: "Pool Lights"
+    command: 0x00010000
+
+  - platform: framed_rs485
+    framed_rs485_id: pool
+    name: "Filter"
+    command: 0x80000000
+```
