@@ -196,7 +196,7 @@ Use `generic_framed_rs485` to bypass validation for custom buses.
 
   `on_frame` is the primary way to write a single decode lambda that updates multiple sensors
   at once. Template sensors (`platform: template`) receive values via `id(sensor_id).publish_state(...)`.
-  See the [Hayward AquaLogic example](#example) for the LED-mask and display-text patterns.
+  See the [Hayward AquaLogic example](#basic-usage) for the LED-mask and display-text patterns.
 
   **Allocation:** LED-mask frames are fully allocation-free — decode into local integer variables and
   call `publish_state`. Display-text frames require one `std::string` construction per
@@ -287,9 +287,9 @@ sensor:
 With `dump_frames: true` and logger at DEBUG level, each validated frame is logged:
 
 ```
-[D][framed_rs485:xxx]: RX 0101 01 01
-[D][framed_rs485:xxx]: RX 0102 01 02 00 00 08 00 00 08 00 00
-[D][framed_rs485:xxx]: RX 0103 01 03 00 50 6f 6f 6c 20 54 ...
+[D][framed_rs485:xxx]: RX 010101
+[D][framed_rs485:xxx]: RX 0102010200000800000800
+[D][framed_rs485:xxx]: RX 010301035000506f6f6c2054...
 ```
 
 The first four hex chars are the two-byte frame type. Collect these over a few
