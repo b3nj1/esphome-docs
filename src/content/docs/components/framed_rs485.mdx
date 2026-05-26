@@ -14,11 +14,42 @@ Profiles bundle correct defaults for known controllers. Custom framing bytes, CR
 algorithms, TX gate behaviour, built-in decoders, and user lambdas are all
 configurable in YAML, making the component useful beyond any single product.
 
-## Basic usage
+## Recommended framework: ESP-IDF
 
-Minimal Hayward AquaLogic configuration (read sensors and send button commands):
+Use the **ESP-IDF framework**, not Arduino:
 
 ```yaml
+esp32:
+  board: esp32dev   # replace with your board identifier
+  framework:
+    type: esp-idf
+```
+
+When `flow_control_pin` is set on the `uart:` component under ESP-IDF, the ESP32
+UART peripheral enters hardware RS-485 half-duplex mode
+(`UART_MODE_RS485_HALF_DUPLEX`). The hardware asserts the DE/RE pin exactly when
+the TX FIFO fills and deasserts only after the **shift register** finishes clocking
+out the last bit — sub-bit precision that no software loop can match.
+
+Under the Arduino framework the UART component falls back to software pin toggling
+around `write()` calls: DE deasserts as soon as the FIFO drains, while the final
+byte is still shifting. This can clip the last bit on the bus, causing intermittent
+CRC failures or missed commands. Arduino also has no hardware RS-485 echo
+suppression, so the hub may read its own transmitted bytes as incoming frames.
+
+## Basic usage
+
+Minimal Hayward AquaLogic configuration (read sensors and send button commands).
+
+When multiple sensors share the same frame type, use `on_frame:` on the hub to decode
+the payload once and push values to `template` sensors — one lambda, all sensors updated:
+
+```yaml
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
 uart:
   id: pool_uart
   tx_pin: GPIO17
@@ -27,26 +58,60 @@ uart:
   data_bits: 8
   parity: NONE
   stop_bits: 2
+  flow_control_pin: GPIO4   # DE/RE pin; omit if your adapter auto-manages direction
 
 framed_rs485:
   id: pool
   uart_id: pool_uart
   profile: hayward_aqualogic_wireless
 
+  on_frame:
+    # LED status frame: decode the 32-bit mask once, push to all LED sensors.
+    - frame_type: [0x01, 0x02]
+      then:
+        - lambda: |-
+            if (payload.size() < 6) return;
+            uint32_t mask = uint32_t(payload[2]) | (uint32_t(payload[3]) << 8) |
+                            (uint32_t(payload[4]) << 16) | (uint32_t(payload[5]) << 24);
+            id(led_filter).publish_state(bool(mask & (1UL << 5)));
+            id(led_lights).publish_state(bool(mask & (1UL << 6)));
+
+    # Display frame: decode the Hayward text encoding once, push to all display sensors.
+    # Stack buffer avoids heap allocation during character extraction; one std::string
+    # is constructed only at the publish_state call. Text sensors deduplicate internally
+    # so repeated equal values are not forwarded to Home Assistant.
+    - frame_type: [0x01, 0x03]
+      then:
+        - lambda: |-
+            char out[32] = {};
+            uint8_t olen = 0;
+            for (size_t i = 3; i < payload.size() && olen < 30; i++) {
+              uint8_t b = payload[i];
+              if (b > 0x7F) b -= 0x80;
+              if (b == 0) continue;
+              if (b == '_') {
+                if (olen + 2 <= 30) { out[olen++] = '\xC2'; out[olen++] = '\xB0'; }
+              } else {
+                out[olen++] = char(b);
+              }
+            }
+            while (olen > 0 && out[olen - 1] == ' ') olen--;
+            out[olen] = '\0';
+            id(display_text).publish_state(std::string(out, olen));
+
 binary_sensor:
-  - platform: framed_rs485
-    framed_rs485_id: pool
+  - platform: template
+    id: led_filter
     name: "Filter LED"
-    frame_type: [0x01, 0x02]
-    decode: led_bit
-    bit: 5
+
+  - platform: template
+    id: led_lights
+    name: "Lights LED"
 
 text_sensor:
-  - platform: framed_rs485
-    framed_rs485_id: pool
+  - platform: template
+    id: display_text
     name: "Display"
-    frame_type: [0x01, 0x03]
-    decode: display_text
 
 button:
   - platform: framed_rs485
@@ -68,8 +133,19 @@ GND               → GND
 A / B             → RS-485 bus terminals
 ```
 
-For half-duplex adapters with a DE/RE pin, set `flow_control_pin` in YAML to
-that GPIO. If you receive no data, try swapping TX/RX pins or the A/B bus wires.
+For half-duplex adapters with a DE/RE pin, set `flow_control_pin` on the **`uart:`
+component** (not on `framed_rs485:`). Under ESP-IDF this activates the UART
+peripheral's built-in RS-485 half-duplex mode; the hardware drives DE with
+shift-register-level precision and suppresses the TX echo on RX automatically.
+
+```yaml
+uart:
+  flow_control_pin: GPIO4   # DE/RE direction pin
+```
+
+If you receive no data, try swapping `tx_pin`/`rx_pin` or the A/B bus wires.
+Some adapters label DI/RO from the adapter's perspective, which is the reverse of
+the ESP32's.
 
 ## Profiles
 
@@ -91,7 +167,6 @@ Use `generic_framed_rs485` to bypass validation for custom buses.
 - **id** (*Optional*, [ID](/guides/configuration-types#id)): Manually specify the ID of the hub.
 - **uart_id** (**Required**, [ID](/guides/configuration-types#id)): The ID of the [UART](/components/uart/) bus.
 - **profile** (*Optional*, string): One of the profile names above. Defaults to `hayward_aqualogic_wireless`.
-- **flow_control_pin** (*Optional*, [Pin](/guides/configuration-types#pin)): GPIO for RS-485 DE/RE direction control (half-duplex).
 - **sniffer_only** (*Optional*, boolean): Disable all TX including buttons. Defaults to `false`.
 - **dump_frames** (*Optional*, boolean): Log every validated frame payload at DEBUG level. Defaults to `false`.
 - **max_frame_length** (*Optional*, integer): Discard frames longer than this many bytes. Defaults to `128`.
@@ -112,11 +187,29 @@ Use `generic_framed_rs485` to bypass validation for custom buses.
   `header_inclusive` includes DLE+STX in the CRC sum (Hayward wireless).
   `payload_only` computes the CRC over the unescaped payload only (Hayward wired remotes).
 
+- **on_frame** (*Optional*, [Automation](/guides/automations)): Automation(s) that fire when a
+  matching frame is received. Multiple entries may be listed; each fires independently based
+  on its `frame_type` filter. The automation receives the payload as `payload`
+  (`const std::vector<uint8_t> &`). Use `[]` to match every frame.
+
+  - **frame_type** (**Required**, list of hex bytes): Two-byte frame type to match.
+
+  `on_frame` is the primary way to write a single decode lambda that updates multiple sensors
+  at once. Template sensors (`platform: template`) receive values via `id(sensor_id).publish_state(...)`.
+  See the [Hayward AquaLogic example](#example) for the LED-mask and display-text patterns.
+
+  **Allocation:** LED-mask frames are fully allocation-free — decode into local integer variables and
+  call `publish_state`. Display-text frames require one `std::string` construction per
+  `publish_state` call; use a `char[]` stack buffer for intermediate decoding and only
+  construct the `std::string` at the call site. Binary and text sensors deduplicate
+  internally: repeated `publish_state` calls with the same value do not forward updates to
+  Home Assistant. Numeric sensors do not deduplicate — use `filters: throttle:` or
+  `filters: delta:` to avoid unnecessary network traffic at bus frequency.
+
 - **tx** (*Optional*): TX and command-queue configuration.
 
   - **queue_policy** (*Optional*, string): `replace_latest` (new command overwrites pending) or `fifo`. Defaults to `replace_latest`.
   - **max_queue_size** (*Optional*, integer): Maximum commands in queue. Must be `1` for `replace_latest`. Defaults to `1`.
-  - **tx_guard_time** (*Optional*, [Time](/guides/configuration-types#time)): Minimum idle time after last RX before TX. Defaults to `5ms`.
   - **idle_command** (*Optional*, hex uint32): Command value to send on the gate trigger when no real command is queued. Required for Jandy AllButton emulation.
 
   - **gate** (*Optional*): TX gate — controls when queued commands are transmitted.
@@ -178,7 +271,6 @@ text_sensor:
     framed_rs485_id: bus
     name: "Last Frame Type"
     frame_type: []
-    decode: last_frame_type
 
 sensor:
   - platform: framed_rs485
@@ -210,8 +302,9 @@ to only one variant and watch whether `crc_failures` climbs.
 
 ### Step 5: Configure decoders
 
-Replace the sniffer config with actual sensor/button definitions using `frame_type:`
-to filter and `decode:` or `lambda:` to extract values.
+Replace the sniffer config with sensor and button definitions. Use `on_frame:` on the
+hub when multiple sensors share the same frame type (decode once, push to all). Use
+`decode:` or per-sensor `lambda:` when a sensor is the sole reader of its frame type.
 
 ## Diagnostics
 

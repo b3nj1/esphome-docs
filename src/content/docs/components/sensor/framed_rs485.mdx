@@ -23,11 +23,6 @@ It requires the [Framed RS-485](/components/framed_rs485/) hub to be configured.
   | `uint32_be` | `offset` | Unsigned 32-bit big-endian value at bytes `offset`..`offset+3`. |
   | `uint32_le` | `offset` | Unsigned 32-bit little-endian value at bytes `offset`..`offset+3`. |
   | `bcd` | `offset` | BCD-encoded byte at payload byte `offset`. |
-  | `led_mask` | — | 32-bit current (solid) LED mask. Use with `frame_type: [0x01, 0x02]`. |
-  | `led_mask_blinking` | — | 32-bit blinking LED mask. Use with `frame_type: [0x01, 0x02]`. |
-  | `display_temperature` | `temperature_label` | Extracts a number from display text where the text contains `temperature_label` (case-insensitive). Use with `frame_type: [0x01, 0x03]`. |
-  | `vsp_speed_request` | — | VSP pump speed percent from frame `0x0c 0x01`. |
-  | `vsp_power_bcd` | — | VSP watts (BCD) from frame `0x00 0x0c`. |
   | `frames_received` | — | Running count of validated frames received. |
   | `crc_failures` | — | Running count of CRC failures. |
   | `commands_sent` | — | Running count of TX frames sent. |
@@ -35,8 +30,7 @@ It requires the [Framed RS-485](/components/framed_rs485/) hub to be configured.
   | `last_keepalive_ms` | — | Interval between the two most recent gate frames in ms. |
   | `queue_depth` | — | Current TX queue depth. |
 
-- **offset** (*Optional*, integer): Payload byte index for raw integer decoders. Defaults to `0`.
-- **temperature_label** (*Optional*, string): Substring to match in display text for `display_temperature`. Case-insensitive. The first temperature digit found **after** the label position is returned, so `temperature_label: pool` correctly returns `84` from `"Air 68F Pool 84F"`. Defaults to `""` (returns the first temperature digit found anywhere in the text).
+- **offset** (*Optional*, integer): Payload byte index for `uint8`, `uint16_*`, `uint32_*`, and `bcd` decoders. Defaults to `0`.
 - **lambda** (*Optional*, [lambda](/guides/automations#lambda)): Custom decode function. Overrides `decode` when present.
   Signature: `optional<float>(const std::vector<uint8_t> &payload)`. Return `{}` to publish nothing.
 
@@ -48,15 +42,14 @@ All other options from [Sensor](/components/sensor/#base-sensor-configuration).
 sensor:
   - platform: framed_rs485
     framed_rs485_id: pool
-    name: "Pool Temperature"
-    frame_type: [0x01, 0x03]
-    decode: display_temperature
-    temperature_label: pool
-    unit_of_measurement: "°F"
-    device_class: temperature
+    name: "ePump RPM"
+    frame_type: [0x00, 0x1F]
+    decode: uint16_be
+    offset: 6
+    unit_of_measurement: RPM
     accuracy_decimals: 0
     filters:
-      - throttle: 10s
+      - throttle: 5s
 
   - platform: framed_rs485
     framed_rs485_id: pool
@@ -68,6 +61,134 @@ sensor:
     filters:
       - throttle: 30s
 
+  - platform: framed_rs485
+    framed_rs485_id: pool
+    name: "SWG Salt PPM"
+    frame_type: [0x00, 0x16]
+    lambda: |-
+      if (payload.size() < 3) return {};
+      return float(payload[2]) * 100.0f;
+    unit_of_measurement: ppm
+    accuracy_decimals: 0
+```
+
+## Protocol-specific decode patterns
+
+When multiple sensors read from the same frame type, decode the frame once in an `on_frame:`
+handler on the hub and push values to `template` sensors. This is cleaner than repeating
+the same decode logic in every sensor's `lambda:`.
+
+**Hayward AquaLogic: temperatures and VSP from shared frames**
+
+The display frame (`0x01 0x03`) carries pool temperature, air temperature, and display text.
+The VSP frames carry speed and power. One `on_frame:` handler per frame type covers all sensors:
+
+```yaml
+framed_rs485:
+  id: pool
+  on_frame:
+    - frame_type: [0x01, 0x03]
+      then:
+        - lambda: |-
+            // Decode into a stack buffer -- no heap allocation during extraction.
+            // Text sensors deduplicate internally; numeric sensors use throttle filters.
+            char text[32] = {};
+            uint8_t tlen = 0;
+            for (size_t i = 3; i < payload.size() && tlen < 30; i++) {
+              uint8_t b = payload[i];
+              if (b > 0x7F) b -= 0x80;
+              if (b == 0) continue;
+              if (b == '_') {
+                if (tlen + 2 <= 30) { text[tlen++] = '\xC2'; text[tlen++] = '\xB0'; }
+              } else {
+                text[tlen++] = char(b);
+              }
+            }
+            while (tlen > 0 && text[tlen - 1] == ' ') tlen--;
+            text[tlen] = '\0';
+            id(display_text).publish_state(std::string(text, tlen));
+            // Guard on "Temp" to prevent false matches when "Pool" or "Air" appear
+            // on other screens in a different context.
+            if (strstr(text, "Temp")) {
+              const char *p = strstr(text, "Pool");
+              if (p) {
+                p += 4; while (*p == ' ') p++;
+                float v = 0; bool ok = false;
+                while (*p >= '0' && *p <= '9') { v = v * 10.0f + float(*p++ - '0'); ok = true; }
+                if (ok) id(pool_temp).publish_state(v);
+              }
+              p = strstr(text, "Air");
+              if (p) {
+                p += 3; while (*p == ' ') p++;
+                float v = 0; bool ok = false;
+                while (*p >= '0' && *p <= '9') { v = v * 10.0f + float(*p++ - '0'); ok = true; }
+                if (ok) id(air_temp).publish_state(v);
+              }
+            }
+
+    - frame_type: [0x0c, 0x01]
+      then:
+        - lambda: |-
+            if (payload.size() < 4) return;
+            id(vsp_speed).publish_state(float(payload[3]));
+
+    - frame_type: [0x00, 0x0c]
+      then:
+        - lambda: |-
+            if (payload.size() < 5) return;
+            uint32_t watts = 0;
+            for (size_t i = 2; i < 5; i++)
+              watts = watts * 100 + uint32_t(payload[i] >> 4) * 10 + uint32_t(payload[i] & 0x0F);
+            id(vsp_power).publish_state(float(watts));
+
+sensor:
+  - platform: template
+    id: pool_temp
+    name: "Pool Temperature"
+    unit_of_measurement: "°F"
+    device_class: temperature
+    accuracy_decimals: 0
+
+  - platform: template
+    id: air_temp
+    name: "Air Temperature"
+    unit_of_measurement: "°F"
+    device_class: temperature
+    accuracy_decimals: 0
+
+  - platform: template
+    id: vsp_speed
+    name: "VSP Commanded Speed"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+
+  - platform: template
+    id: vsp_speed
+    name: "VSP Commanded Speed"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+
+  - platform: template
+    id: vsp_power
+    name: "VSP Power"
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 0
+
+text_sensor:
+  - platform: template
+    id: display_text
+    name: "Display"
+```
+
+**When to use per-sensor `lambda:` instead**
+
+Use a `framed_rs485` sensor with `lambda:` only when a single sensor maps one-to-one with
+a unique frame type and no other sensor needs that frame. Example — a salt cell that is the
+only consumer of its status frame:
+
+```yaml
+sensor:
   - platform: framed_rs485
     framed_rs485_id: pool
     name: "SWG Salt PPM"
