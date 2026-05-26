@@ -37,6 +37,11 @@ byte is still shifting. This can clip the last bit on the bus, causing intermitt
 CRC failures or missed commands. Arduino also has no hardware RS-485 echo
 suppression, so the hub may read its own transmitted bytes as incoming frames.
 
+`idle_gap` TX gate mode is particularly affected under Arduino: each transmitted
+frame updates `last_rx_time_` via the echo, which resets the idle timer and may
+prevent `idle_gap` from ever firing again. Use `frame_trigger` or `fixed_delay`
+under Arduino, or switch to ESP-IDF.
+
 ## Basic usage
 
 Minimal Hayward AquaLogic configuration (read sensors and send button commands).
@@ -202,7 +207,9 @@ Use `generic_framed_rs485` to bypass validation for custom buses.
   on its `frame_type` filter. The automation receives the payload as `payload`
   (`const std::vector<uint8_t> &`). Use `[]` to match every frame.
 
-  - **frame_type** (**Required**, list of hex bytes): Two-byte frame type to match.
+  - **frame_type** (**Required**, list of hex bytes): Frame-type prefix to match against the start of each
+    received payload. Use `[]` to match every frame. Conventionally one or two bytes; up to eight bytes
+    are accepted by the schema.
 
   `on_frame` is the primary way to write a single decode lambda that updates multiple sensors
   at once. Template sensors (`platform: template`) receive values via `id(sensor_id).publish_state(...)`.
@@ -220,7 +227,10 @@ Use `generic_framed_rs485` to bypass validation for custom buses.
 
   - **queue_policy** (*Optional*, string): `replace_latest` (new command overwrites pending) or `fifo`. Defaults to `replace_latest`.
   - **max_queue_size** (*Optional*, integer): Maximum commands in queue. Must be `1` for `replace_latest`. Defaults to `1`.
-  - **idle_command** (*Optional*, hex uint32): Command value to send on the gate trigger when no real command is queued. Required for Jandy AllButton emulation.
+  - **idle_command** (*Optional*, hex uint32): Command value to send on the gate trigger when no real command is queued.
+    Required for Jandy AllButton emulation. The encoding follows `key_format`: for `wireless_9byte` the full 32 bits
+    are used; for `jandy_allbutton` only the low byte is used as the button code. See `button.command` for the same
+    encoding rules. Idle transmissions are not counted in the `commands_sent` diagnostic.
 
   - **gate** (*Optional*): TX gate — controls when queued commands are transmitted.
 

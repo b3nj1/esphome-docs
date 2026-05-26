@@ -66,7 +66,8 @@ The two modes are mutually exclusive.
 ## Configuration variables
 
 - **framed_rs485_id** (**Required**, [ID](/guides/configuration-types#id)): The ID of the `framed_rs485` hub.
-- **frame_type** (**Required**, list of hex bytes): Two-byte frame type prefix to match. Use `[]` to match every frame.
+- **frame_type** (**Required**, list of hex bytes): Frame-type prefix to match against the start of each received
+  payload. Use `[]` to match every frame. Conventionally one or two bytes; up to eight bytes are accepted.
 
 ### Lambda mode
 
@@ -82,7 +83,9 @@ until the opposite is proven or `timeout` fires.
 Before matching, internal whitespace runs are collapsed to a single space so display centering
 padding is transparent. Matching is case-insensitive substring search.
 
-- **match_on** (**Required**, string or list of strings): Proof-positive condition. When all strings in the list
+  At least one of `match_on` or `match_off` must be present in latching text-match mode.
+
+- **match_on** (*Optional*, string or list of strings): Proof-positive condition. When all strings in the list
   appear in the current text (AND logic), the sensor latches to `true`.
 - **match_off** (*Optional*, string or list of strings): Proof-negative condition. When all strings appear,
   the sensor latches to `false`. If omitted, `timeout` is the only way back to `false`.
