@@ -84,7 +84,7 @@ text_sensor:
 - **lambda** (*Optional*, [lambda](/guides/automations#lambda)): Custom decode function.
   Signature: `optional<std::string>(const std::vector<uint8_t> &payload)`. Return `{}` to publish nothing.
   When omitted, the sensor publishes the two-byte frame type of the most recently received valid frame
-  as a hex string (for example `"01 02"`). Use with `frame_type: []` to catalog an unknown bus.
+  as a hex string (for example `"0102"`). Use with `frame_type: []` to catalog an unknown bus.
 
 All other options from [Text Sensor](/components/text_sensor/#base-text-sensor-configuration).
 
