@@ -12,7 +12,8 @@ It requires the [Framed RS-485](/components/framed_rs485/) hub to be configured.
 ## Configuration variables
 
 - **framed_rs485_id** (**Required**, [ID](/guides/configuration-types#id)): The ID of the `framed_rs485` hub.
-- **frame_type** (**Required**, list of hex bytes): Two-byte frame type prefix to match. Use `[]` to match every frame.
+- **frame_type** (**Required**, list of hex bytes): Frame-type prefix to match against the start of each received
+  payload. Use `[]` to match every frame. Conventionally one or two bytes; up to eight bytes are accepted.
 - **decode** (*Optional*, string): Built-in decoder. Defaults to `uint8`.
 
   | decode | Required extras | Description |
