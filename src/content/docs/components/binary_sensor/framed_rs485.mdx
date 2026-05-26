@@ -3,63 +3,158 @@ description: "Instructions for setting up framed_rs485 binary sensors."
 title: "Framed RS-485 Binary Sensor"
 params:
   seo:
-    description: Instructions for setting up framed_rs485 binary sensors including LED bit decoding and latching display text match.
+    description: Instructions for setting up framed_rs485 binary sensors including on_frame multi-sensor decode and latching display text match.
 ---
 
 The `framed_rs485` binary sensor platform reads boolean values from a DLE-framed
 RS-485 bus. It requires the [Framed RS-485](/components/framed_rs485/) hub to be configured.
 
+## Choosing an approach
+
+| Situation | Recommended pattern |
+|---|---|
+| Multiple sensors read from the **same frame type** (e.g. LED bitmask) | `on_frame:` on the hub + `platform: template` sensors |
+| One sensor reads a frame that nothing else needs | `platform: framed_rs485` with `lambda:` |
+| Latching boolean from a cycled display — frame already decoded in `on_frame:` | `on_frame:` handler + `globals:` timestamp + `platform: template` sensor |
+| Latching boolean from a frame not decoded anywhere else | `platform: framed_rs485` with `match_on:`/`match_off:` |
+
+## `on_frame:` with template sensors (recommended for shared frames)
+
+When one frame byte carries many bits of state — such as an LED bitmask — decode it once
+in the hub's `on_frame:` and push each bit to a `platform: template` binary sensor. This
+avoids repeating the same mask extraction in every sensor's lambda.
+
+```yaml
+framed_rs485:
+  id: pool
+  on_frame:
+    - frame_type: [0x01, 0x02]
+      then:
+        - lambda: |-
+            if (payload.size() < 6) return;
+            uint32_t mask = uint32_t(payload[2]) | (uint32_t(payload[3]) << 8) |
+                            (uint32_t(payload[4]) << 16) | (uint32_t(payload[5]) << 24);
+            id(led_filter).publish_state(bool(mask & (1UL << 5)));
+            id(led_lights).publish_state(bool(mask & (1UL << 6)));
+            id(led_heater).publish_state(bool(mask & (1UL << 0)));
+
+binary_sensor:
+  - platform: template
+    id: led_filter
+    name: "Filter LED"
+
+  - platform: template
+    id: led_lights
+    name: "Lights LED"
+
+  - platform: template
+    id: led_heater
+    name: "Heater LED"
+```
+
+See [`on_frame:`](/components/framed_rs485/#on_frame) in the hub docs for full details.
+
+## `framed_rs485` binary sensor modes
+
+Two operating modes are available, selected by which keys are provided:
+
+1. **Lambda mode** (`lambda:`): stateless per-frame decode. Return `optional<bool>`, or `{}` to publish nothing.
+2. **Latching text-match mode** (`match_on:` / `match_off:`): the sensor holds its last proven state until the opposite proof arrives or `timeout` expires.
+
+The two modes are mutually exclusive.
+
 ## Configuration variables
 
 - **framed_rs485_id** (**Required**, [ID](/guides/configuration-types#id)): The ID of the `framed_rs485` hub.
 - **frame_type** (**Required**, list of hex bytes): Two-byte frame type prefix to match. Use `[]` to match every frame.
-- **decode** (*Optional*, string): Built-in decoder. One of:
 
-  - `led_bit` *(default)*: True when bit `bit` of the 32-bit current LED mask is set.
-  - `display_text_match`: Latching match against decoded display text. True when `match_on` is satisfied; false when `match_off` is satisfied or `timeout` expires. See below.
+### Lambda mode
 
-- **bit** (*Optional*, integer): Which bit of the LED mask to test (0–31). Only for `led_bit` decode. Defaults to `0`.
-- **lambda** (*Optional*, [lambda](/guides/automations#lambda)): Custom decode function. Overrides `decode` when present.
+- **lambda** (**Required** in this mode, [lambda](/guides/automations#lambda)): Custom decode function.
   Signature: `optional<bool>(const std::vector<uint8_t> &payload)`. Return `{}` to publish nothing.
 
+### Latching text-match mode
+
+Because a multi-screen display cycles through multiple messages, a simple per-frame match would
+flip back to `false` on every non-matching screen. The latching mode holds the last proven state
+until the opposite is proven or `timeout` fires.
+
+Before matching, internal whitespace runs are collapsed to a single space so display centering
+padding is transparent. Matching is case-insensitive substring search.
+
+- **match_on** (**Required**, string or list of strings): Proof-positive condition. When all strings in the list
+  appear in the current text (AND logic), the sensor latches to `true`.
+- **match_off** (*Optional*, string or list of strings): Proof-negative condition. When all strings appear,
+  the sensor latches to `false`. If omitted, `timeout` is the only way back to `false`.
+- **timeout** (*Optional*, [Time](/guides/configuration-types#time)): Revert to `false` if no proof appears
+  within this duration. Set to 2-3x the display cycle period. Defaults to `0` (never expire).
+  Has no effect until the sensor has seen at least one proof.
+- **text_lambda** (*Optional*, [lambda](/guides/automations#lambda)): Custom text extractor for latching-match
+  mode. Signature: `optional<std::string>(const std::vector<uint8_t> &payload)`. Return `{}` to skip the frame.
+  When omitted, the default extractor yields printable ASCII bytes (0x20-0x7E) from the raw payload.
+  Use this only when the frame is not already decoded in an `on_frame:` handler — for example, an isolated
+  boolean sensor on a device with protocol-specific text encoding. When you already have an `on_frame:`
+  handler decoding the same frame (common when reading temperatures or display text alongside boolean
+  state), implement the latching logic there instead using `strstr()` and a `globals:` timestamp.
+
 All other options from [Binary Sensor](/components/binary_sensor/#base-binary-sensor-configuration).
-
-## `display_text_match` options
-
-Because an AquaLogic display cycles through multiple screens, a simple per-frame
-match would flip back to `false` on every non-matching screen. `display_text_match`
-uses **latch semantics**: the sensor holds its last proven state until the opposite
-is proven or a timeout fires.
-
-Before matching, internal whitespace runs are collapsed to a single space so display
-centering padding is transparent. Matching is case-insensitive substring search.
-
-- **match_on** (**Required**, string or list of strings): Proof-positive condition. When all strings in the list appear in the current display text (AND logic), the sensor latches to `true`. A single string may be given without list notation.
-- **match_off** (*Optional*, string or list of strings): Proof-negative condition. When all strings in the list appear, the sensor latches to `false`. If omitted, `timeout` is the only way back to `false`.
-- **timeout** (*Optional*, [Time](/guides/configuration-types#time)): If no proof (positive or negative) is seen within this duration, revert to `false`. Set to 2–3× the display cycle period. Defaults to `0` (never expire). Has no effect until the sensor has seen at least one proof.
 
 ## Example
 
 ```yaml
+# Heater mode (Auto vs. Manual Off) appears only on the display, which cycles
+# through multiple screens. The on_frame: handler already decodes the display
+# text for temperature -- heater-mode detection is added to the same handler.
+# A globals: timestamp latches the last proven state and times it out after 60 s.
+
+globals:
+  - id: g_heater_proof_ms
+    type: uint32_t
+    initial_value: '0'
+
+framed_rs485:
+  id: pool
+  on_frame:
+    - frame_type: [0x01, 0x03]
+      then:
+        - lambda: |-
+            char text[32] = {};
+            uint8_t tlen = 0;
+            for (size_t i = 3; i < payload.size() && tlen < 30; i++) {
+              uint8_t b = payload[i];
+              if (b > 0x7F) b -= 0x80;
+              if (b == 0) continue;
+              if (b == '_') {
+                if (tlen + 2 <= 30) { text[tlen++] = '\xC2'; text[tlen++] = '\xB0'; }
+              } else {
+                text[tlen++] = char(b);
+              }
+            }
+            while (tlen > 0 && text[tlen - 1] == ' ') tlen--;
+            text[tlen] = '\0';
+            // Latch on "Heater Auto" or "Heater Manual"; hold state between screens.
+            if (strstr(text, "Heater")) {
+              if (strstr(text, "Auto")) {
+                id(heater_auto).publish_state(true);
+                id(g_heater_proof_ms) = millis();
+              } else if (strstr(text, "Manual")) {
+                id(heater_auto).publish_state(false);
+                id(g_heater_proof_ms) = millis();
+              }
+            }
+            // Revert to false if no proof has arrived for 60 s (2-3x display cycle).
+            if (id(g_heater_proof_ms) != 0 &&
+                millis() - id(g_heater_proof_ms) > 60000UL) {
+              id(heater_auto).publish_state(false);
+              id(g_heater_proof_ms) = 0;
+            }
+
 binary_sensor:
-  - platform: framed_rs485
-    framed_rs485_id: pool
-    name: "Filter LED"
-    frame_type: [0x01, 0x02]
-    decode: led_bit
-    bit: 5
-
-  # Heater mode is only visible on the display. match_on/match_off use lists
-  # so individual tokens narrow the match without requiring exact spacing.
-  - platform: framed_rs485
-    framed_rs485_id: pool
+  - platform: template
+    id: heater_auto
     name: "Heater Auto Mode"
-    frame_type: [0x01, 0x03]
-    decode: display_text_match
-    match_on: ["Heater", "Auto"]
-    match_off: ["Heater", "Manual"]
-    timeout: 60s
 
+  # Lambda mode for a sensor that is the sole reader of its frame type.
   - platform: framed_rs485
     framed_rs485_id: pool
     name: "Custom Flag"

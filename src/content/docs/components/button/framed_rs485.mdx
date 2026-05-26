@@ -59,14 +59,25 @@ button:
     command: 0x40000000
 ```
 
-Use the corresponding LED binary sensors to read the actual resulting state:
+Use the corresponding LED binary sensors to read the actual resulting state.
+When multiple LEDs share the same status frame, decode once in `on_frame:` and push
+to `template` sensors — see the [binary sensor docs](/components/binary_sensor/framed_rs485/)
+for the full pattern. For a single LED:
 
 ```yaml
+framed_rs485:
+  id: pool
+  on_frame:
+    - frame_type: [0x01, 0x02]
+      then:
+        - lambda: |-
+            if (payload.size() < 6) return;
+            uint32_t mask = uint32_t(payload[2]) | (uint32_t(payload[3]) << 8) |
+                            (uint32_t(payload[4]) << 16) | (uint32_t(payload[5]) << 24);
+            id(led_filter).publish_state(bool(mask & (1UL << 5)));
+
 binary_sensor:
-  - platform: framed_rs485
-    framed_rs485_id: pool
+  - platform: template
+    id: led_filter
     name: "Filter LED"
-    frame_type: [0x01, 0x02]
-    decode: led_bit
-    bit: 5
 ```

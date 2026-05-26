@@ -3,26 +3,88 @@ description: "Instructions for setting up framed_rs485 text sensors."
 title: "Framed RS-485 Text Sensor"
 params:
   seo:
-    description: Instructions for setting up framed_rs485 text sensors including display text and blink text decoding.
+    description: Instructions for setting up framed_rs485 text sensors including on_frame multi-sensor decode and custom lambda.
 ---
 
 The `framed_rs485` text sensor platform reads string values from a DLE-framed
 RS-485 bus. It requires the [Framed RS-485](/components/framed_rs485/) hub to be configured.
 
+## Choosing an approach
+
+When multiple text sensors (or a mix of text and numeric sensors) read from the same frame
+type, decode in a single `on_frame:` handler and push to `platform: template` sensors.
+Use a per-sensor `lambda:` only when that sensor is the sole reader of its frame type.
+
+**Multiple sensors from the same frame — use `on_frame:`:**
+
+Stack buffers are used for intermediate decoding to avoid heap allocation during character
+extraction. One `std::string` is constructed per `publish_state` call (unavoidable because
+the API requires it), but text sensors deduplicate internally so repeated equal values are
+not forwarded to Home Assistant.
+
+```yaml
+framed_rs485:
+  id: pool
+  on_frame:
+    - frame_type: [0x01, 0x03]
+      then:
+        - lambda: |-
+            // Decode Hayward AquaLogic display text into a stack buffer.
+            // Encoding: bit 7 of each byte = blink flag; '_' = UTF-8 degree symbol.
+            char text[32] = {};
+            uint8_t tlen = 0;
+            for (size_t i = 3; i < payload.size() && tlen < 30; i++) {
+              uint8_t b = payload[i];
+              if (b > 0x7F) b -= 0x80;
+              if (b == 0) continue;
+              if (b == '_') {
+                if (tlen + 2 <= 30) { text[tlen++] = '\xC2'; text[tlen++] = '\xB0'; }
+              } else {
+                text[tlen++] = char(b);
+              }
+            }
+            while (tlen > 0 && text[tlen - 1] == ' ') tlen--;
+            text[tlen] = '\0';
+            id(display_text).publish_state(std::string(text, tlen));
+
+            // Blinking text: re-extract only bytes that had bit 7 set.
+            char blink[32] = {};
+            uint8_t blen = 0;
+            for (size_t i = 3; i < payload.size() && blen < 30; i++) {
+              uint8_t b = payload[i];
+              if (!(b & 0x80)) continue;
+              b -= 0x80;
+              if (b == 0) continue;
+              if (b == '_') {
+                if (blen + 2 <= 30) { blink[blen++] = '\xC2'; blink[blen++] = '\xB0'; }
+              } else {
+                blink[blen++] = char(b);
+              }
+            }
+            while (blen > 0 && blink[blen - 1] == ' ') blen--;
+            blink[blen] = '\0';
+            id(display_blink).publish_state(std::string(blink, blen));
+
+text_sensor:
+  - platform: template
+    id: display_text
+    name: "Display"
+
+  - platform: template
+    id: display_blink
+    name: "Display Blink"
+    # Non-empty when any character on the display is blinking.
+    # Automations can trigger on state != "" to detect alarms or mode changes.
+```
+
 ## Configuration variables
 
 - **framed_rs485_id** (**Required**, [ID](/guides/configuration-types#id)): The ID of the `framed_rs485` hub.
 - **frame_type** (**Required**, list of hex bytes): Two-byte frame type prefix to match. Use `[]` to match every frame.
-- **decode** (*Optional*, string): Built-in decoder. Defaults to `display_text`.
-
-  | decode | Description |
-  |---|---|
-  | `display_text` | Full display text with `°` substitution, null bytes stripped, and whitespace trimmed. High-bit blink flags are ignored — the same glyph appears whether it is blinking or solid. Use with `frame_type: [0x01, 0x03]`. |
-  | `display_blink_text` | Only the characters that are actively blinking (high bit set in the raw byte). Returns an empty string when nothing blinks. On AquaLogic controllers blinking text typically signals an alarm, a mode-change in progress, or a value being set. Use with `frame_type: [0x01, 0x03]`. |
-  | `last_frame_type` | Hex string of the two-byte frame type of the most recently received valid frame. Useful for cataloging an unknown bus. Use with `frame_type: []`. |
-
-- **lambda** (*Optional*, [lambda](/guides/automations#lambda)): Custom decode function. Overrides `decode` when present.
+- **lambda** (*Optional*, [lambda](/guides/automations#lambda)): Custom decode function.
   Signature: `optional<std::string>(const std::vector<uint8_t> &payload)`. Return `{}` to publish nothing.
+  When omitted, the sensor publishes the two-byte frame type of the most recently received valid frame
+  as a hex string (for example `"01 02"`). Use with `frame_type: []` to catalog an unknown bus.
 
 All other options from [Text Sensor](/components/text_sensor/#base-text-sensor-configuration).
 
@@ -30,31 +92,18 @@ All other options from [Text Sensor](/components/text_sensor/#base-text-sensor-c
 
 ```yaml
 text_sensor:
-  - platform: framed_rs485
-    framed_rs485_id: pool
-    name: "Pool Display"
-    frame_type: [0x01, 0x03]
-    decode: display_text
-
-  # Non-empty string when any character on the display is blinking.
-  # Automations can trigger on state != "" to detect alarms or mode changes.
-  - platform: framed_rs485
-    framed_rs485_id: pool
-    name: "Display Blink"
-    frame_type: [0x01, 0x03]
-    decode: display_blink_text
-
-  - platform: framed_rs485
-    framed_rs485_id: pool
-    name: "Last Frame Type"
-    frame_type: []
-    decode: last_frame_type
-    entity_category: diagnostic
-
+  # Single sensor, unique frame type -- per-sensor lambda is fine here.
   - platform: framed_rs485
     framed_rs485_id: pool
     name: "Raw Payload"
     frame_type: [0x00, 0x16]
     lambda: |-
       return std::string(payload.begin() + 2, payload.end());
+
+  # Built-in: publish the last received frame type as hex. Useful for bus mapping.
+  - platform: framed_rs485
+    framed_rs485_id: pool
+    name: "Last Frame Type"
+    frame_type: []
+    entity_category: diagnostic
 ```
