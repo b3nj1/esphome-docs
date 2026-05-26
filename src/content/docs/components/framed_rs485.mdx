@@ -187,6 +187,16 @@ Use `generic_framed_rs485` to bypass validation for custom buses.
   `header_inclusive` includes DLE+STX in the CRC sum (Hayward wireless).
   `payload_only` computes the CRC over the unescaped payload only (Hayward wired remotes).
 
+- **key_format** (*Optional*, string): Button command encoding. Set automatically by the active
+  profile; only needed when using `generic_framed_rs485` with buttons.
+
+  | Value | Used by |
+  |---|---|
+  | `wireless_9byte` *(default for generic)* | Hayward AquaLogic wireless remote (frame type `0x0083`, 9-byte payload) |
+  | `wired_remote` | Hayward AquaLogic wired remote |
+  | `wired_local` | Hayward AquaLogic local wired controller |
+  | `jandy_allbutton` | Jandy AquaLink RS AllButton frame |
+
 - **on_frame** (*Optional*, [Automation](/guides/automations)): Automation(s) that fire when a
   matching frame is received. Multiple entries may be listed; each fires independently based
   on its `frame_type` filter. The automation receives the payload as `payload`
@@ -263,8 +273,6 @@ framed_rs485:
   dump_frames: true
   crc:
     type: none
-    rx_accept: [header_inclusive, payload_only]
-    tx_variant: payload_only
 
 text_sensor:
   - platform: framed_rs485
@@ -278,6 +286,7 @@ sensor:
     name: "Frames Received"
     frame_type: []
     decode: frames_received
+    state_class: total_increasing
     filters:
       - throttle: 10s
 ```
