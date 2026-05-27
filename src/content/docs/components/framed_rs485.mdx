@@ -6,16 +6,17 @@ params:
     description: Instructions for setting up the Framed RS-485 hub component for DLE-framed RS-485 buses including Hayward AquaLogic and Jandy AquaLink RS.
 ---
 
-The `framed_rs485` hub lets an ESPHome device participate in DLE-framed RS-485
-buses. It received validates frames locally and enables decode of frames to expose state of
-devices on the bus as Home Assistant entities (eg, pool water temperature).
-It queues outbound commands so they transmit during the narrow timing
-window of the controller's keep-alive window (eg, a Home Assistant button
-entity to turn on the pool lights). Compared to performing these operations
-with a USB/TCP serial based app or even a ESPHome Serial Proxy, these capabilities provide
-reliable delivery of commands, low latency feedback to observe side-effect
-of issued commands, and event reduction by exposing Home Assistatn to
-low-frequency state instead of high-frequency frames.
+The `framed_rs485` hub enables an ESPHome device to participate in DLE-framed
+RS-485 buses. It receives and validates frames locally, allowing it to decode
+them and expose the state of devices on the bus as Home Assistant entities
+(e.g., pool water temperature). It also queues outbound commands so they
+transmit precisely during the narrow timing window of the controller’s
+keep-alive window (e.g., a Home Assistant button entity to turn on the pool
+lights). Compared to performing these operations with a USB/TCP serial-based
+app or an ESPHome Serial Proxy, these capabilities provide reliable command
+delivery, low-latency feedback to observe the side effects of issued commands,
+and significant event reduction by exposing Home Assistant to low-frequency
+states instead of high-frequency frames.
 
 Profiles bundle correct defaults for known controllers. Custom framing bytes,
 CRC algorithms, TX gate behaviour, and user-supplied frame decoders (via
