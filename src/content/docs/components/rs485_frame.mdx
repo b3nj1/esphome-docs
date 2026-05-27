@@ -18,10 +18,11 @@ delivery, low-latency feedback to observe the side effects of issued commands,
 and significant event reduction by exposing Home Assistant to low-frequency
 states instead of high-frequency frames.
 
-Profiles bundle correct defaults for known controllers. Custom framing bytes,
-CRC algorithms, TX gate behaviour, and user-supplied frame decoders (via
-`on_frame:`) are all configurable in YAML, making the component useful beyond
-any single product.
+Profiles bundle CRC, key-format, and gate-frame defaults for the device this
+hub will emulate on the bus, and validate the `uart:` settings at config time
+so a mismatch fails fast. Custom framing bytes, CRC algorithms, TX gate
+behaviour, and user-supplied frame decoders (via `on_frame:`) are all
+configurable in YAML, making the component useful beyond any single product.
 
 ## Recommended framework: ESP-IDF
 
@@ -209,10 +210,14 @@ of the device's.
 
 ## Profiles
 
-Profiles set correct UART settings, gate frame defaults, and key-frame format
-automatically. The profile is the device we are attempting to mimic.
+A profile is the device the hub will emulate on the bus (a wireless remote,
+a wired remote, an AllButton). Selecting one sets the CRC variant, key
+format, default TX gate frame, and TX-side sub-type bytes appropriate for
+that device. Profiles do **not** modify your `uart:` block — they validate
+it at config time and fail fast on a mismatch. Author the `uart:` settings
+yourself using the row from the table below.
 
-| Profile | UART | CRC | Key format | Default gate frame |
+| Profile | Required UART | CRC | Key format | Default gate frame |
 |---|---|---|---|---|
 | `hayward_aqualogic_wireless` *(default)* | 19200 8N2 | sum16 header-inclusive | wireless 12-byte | `[0x01, 0x01]` (keep-alive) |
 | `hayward_aqualogic_wired_remote` | 19200 8N2 | sum16 payload-only | wired remote | `[0x01, 0x01]` |
@@ -220,8 +225,10 @@ automatically. The profile is the device we are attempting to mimic.
 | `jandy_aqualink_rs` | 9600 8N1 | sum8 header-inclusive | jandy_allbutton | `[0x08, 0x00]` (AllButton probe) |
 | `generic_rs485_frame` | any | manual | manual | `[0x01, 0x01]` |
 
-Hayward and Jandy profiles enforce UART settings at config-validation time.
-Use `generic_rs485_frame` to bypass validation for custom buses.
+Hayward and Jandy profiles reject a `uart:` block that does not match the
+"Required UART" column. Use `generic_rs485_frame` to bypass that validation
+for custom buses; everything else (CRC, key format, gate frame) then becomes
+your responsibility to configure explicitly.
 
 `jandy_aqualink_rs` additionally requires `tx.idle_command` (typically `0x00`)
 unless `sniffer_only: true`. The AllButton emulator must ACK every probe
@@ -397,6 +404,61 @@ to only one variant and watch whether `crc_failures` climbs.
 Replace the sniffer config with `on_frame:` handlers that decode each frame type
 of interest, plus `template` sensors that receive the decoded values via
 `id(...).publish_state(...)`. See the [Basic usage](#basic-usage) example.
+
+### Optional: enable sniffer stats
+
+When you want to characterize an unfamiliar bus quickly — cadences, which
+frame types are common vs. rare, how variable each payload is — add a
+`sniffer_stats:` block to the hub. Every `interval` it logs one compact table
+sorted by frame count, then clears its per-period counters. The table includes
+per-frame-type min/median/max for two delays (since the reference frame and
+since the previous frame of the same type) plus a unique-payload count.
+
+```yaml
+rs485_frame:
+  id: bus
+  uart_id: bus_uart
+  profile: generic_rs485_frame
+  sniffer_only: true
+  crc:
+    type: none
+  sniffer_stats:
+    interval: 30s
+    payload_dump_top: 3      # also dump hex+ASCII for the top 3 frame types
+```
+
+Example output on an idle Hayward AquaLogic bus:
+
+```
+[I][rs485_frame.stats]: RS485 sniffer stats over 30000 ms (sorted by count):
+[I][rs485_frame.stats]:   type  cnt    d-ref(min/med/max)    d-same(min/med/max)   payloads
+[I][rs485_frame.stats]:   0101   297       -     -     -        98   100   110   1 unique
+[I][rs485_frame.stats]:   0102    30       0     3    15       980  1000  1100   2 unique
+[I][rs485_frame.stats]:   0103    30       0     4    18       980  1000  1100   4 unique +12
+```
+
+The reference frame defaults to whatever `tx.gate.frame_type` is set to
+(typically the bus keep-alive) so `d-ref` measures the offset of each frame
+from the last keep-alive. The row for the reference frame itself always shows
+`-` in the `d-ref` column. Set `reference_frame_type:` explicitly if you want
+to measure delays against a different frame type.
+
+The unique-payload counter grows across periods (it is not reset on dump) so
+you can leave the sniffer running and watch how the universe of distinct
+payloads stabilizes. The `+N` suffix means N additional unique payloads were
+seen but not stored — the per-frame-type capture buffer caps at 4 distinct
+payloads. With `payload_dump_top: N`, the top N frame types by count get
+their captured payloads logged in hex + ASCII immediately after the table.
+
+The whole feature is compiled out of the firmware unless `sniffer_stats:`
+appears in the YAML — production builds pay no flash or RAM cost.
+
+#### Sniffer-stats configuration variables
+
+- **interval** (*Optional*, [Time](/guides/configuration-types#time)): How often to log the table. Defaults to `30s`.
+- **max_frame_types** (*Optional*, integer, 1–64): Maximum distinct frame types tracked. Frame types past this cap are counted as "dropped events" and logged after the table. Defaults to `32`.
+- **payload_dump_top** (*Optional*, integer, 0–32): After the table, dump captured hex+ASCII payloads for the top N frame types by count. `0` (default) disables.
+- **reference_frame_type** (*Optional*, list of hex bytes): Frame type used as the timing reference for the `d-ref` column. Defaults to `tx.gate.frame_type`.
 
 ## Diagnostics
 
