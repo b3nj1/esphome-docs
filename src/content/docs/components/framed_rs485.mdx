@@ -88,20 +88,25 @@ framed_rs485:
             id(led_lights).publish_state(bool(mask & (1UL << 6)));
 
     # Display frame: decode the Hayward text encoding once, push to all display sensors.
-    # Stack buffer avoids heap allocation during character extraction; one std::string
-    # is constructed only at the publish_state call. Text sensors deduplicate internally
-    # so repeated equal values are not forwarded to Home Assistant.
+    # A static (BSS) buffer avoids heap allocation during character extraction; one
+    # std::string is constructed only at the publish_state call. Text sensors
+    # deduplicate internally so repeated equal values are not forwarded to Home Assistant.
     - frame_type: [0x01, 0x03]
       then:
         - lambda: |-
-            char out[32] = {};
+            // BUF_LEN sized for Hayward Pro Logic's widest displays (~40 chars) plus
+            // UTF-8 degree-symbol expansion. static: BSS-allocated once at program
+            // start -- no per-call stack or heap, matching the hub's setup-time
+            // buffer discipline.
+            const size_t BUF_LEN = 128;
+            static char out[BUF_LEN];
             uint8_t olen = 0;
-            for (size_t i = 3; i < payload.size() && olen < 30; i++) {
+            for (size_t i = 3; i < payload.size() && olen < (BUF_LEN - 2); i++) {
               uint8_t b = payload[i];
               if (b > 0x7F) b -= 0x80;
               if (b == 0) continue;
               if (b == '_') {
-                if (olen + 2 <= 30) { out[olen++] = '\xC2'; out[olen++] = '\xB0'; }
+                if (olen + 2 <= (BUF_LEN - 2)) { out[olen++] = '\xC2'; out[olen++] = '\xB0'; }
               } else {
                 out[olen++] = char(b);
               }
@@ -136,17 +141,34 @@ button:
 `on_frame:` fires at bus frequency (~10 Hz for Hayward, faster on polled buses
 like Jandy). To keep long-uptime devices stable, follow these patterns:
 
-- **No heap allocation in the lambda.** Decode into stack arrays (`char[32]`,
-  `uint8_t[16]`, fixed-size structs). Avoid `std::string text;` followed by
+- **No heap allocation in the lambda.** Decode into fixed-size buffers
+  (`char[BUF_LEN]`, `uint8_t[N]`, structs). Avoid `std::string text;` followed by
   `text.push_back()` — even with `reserve()`, the underlying string is freshly
-  allocated each call. Build a stack buffer and construct one `std::string`
+  allocated each call. Build into a fixed buffer and construct one `std::string`
   only at the `publish_state(...)` call site.
+- **Prefer `static` buffers for anything larger than a few bytes.** A `static`
+  buffer inside a lambda is BSS-allocated once at program start (the same
+  discipline the hub uses for its setup-time scratch buffers). Same memory
+  story as the hub, no per-call stack pressure, no heap. Example:
+
+  ```cpp
+  const size_t BUF_LEN = 128;   // sized to cover the widest payload you expect
+  static char text[BUF_LEN];    // allocated once in .bss; reused across calls
+  uint8_t tlen = 0;             // local, resets each call
+  // ... build into text[0..tlen) ...
+  id(display_text).publish_state(std::string(text, tlen));
+  ```
+
+  Use a named constant (`BUF_LEN`) instead of bare magic numbers so the bound
+  is obvious and easy to bump if your display turns out wider than expected.
+  ESPHome lambdas run on the single-threaded main loop, so static reuse is
+  race-free.
 - **Guard payload lengths.** Always `if (payload.size() < N) return;` before
   indexing past the frame type. A short or malformed frame would otherwise
   read past the vector end.
 - **Avoid `std::to_string`, `String::format`, and other allocating helpers**
-  inside the lambda. Use `snprintf` into a stack buffer if you need formatted
-  text.
+  inside the lambda. Use `snprintf` into a `static char[]` buffer if you need
+  formatted text.
 - **Don't block.** A long loop or `delay()` inside the lambda stalls every
   other ESPHome component for the duration. Keep decode logic tight.
 
@@ -281,6 +303,32 @@ lambda: |-
   if (payload.size() < 5) return;
   // payload[2..] is frame data for a 2-byte frame_type
 ```
+
+### Offset convention: payload-relative
+
+`framed_rs485` uses **payload-relative** byte offsets: `payload[0]` is the
+first byte of the `frame_type` prefix. For the typical 2-byte frame_type, the
+first data byte is at `payload[2]`. This matches what the lambda actually
+receives at the C++ level — the `payload` vector has already had the DLE+STX
+preamble stripped, escapes unwrapped, and CRC removed, but the frame_type
+bytes are still at the start.
+
+**Community references often use a different convention.** Some strip the
+frame_type before counting, so what they call "byte 0" of the frame is our
+`payload[2]`. When porting offsets from external research, add the
+`frame_type` length (usually 2) to translate.
+
+| Source | Their "byte 0" of the frame | Equivalent in our `payload[]` |
+|---|---|---|
+| **`framed_rs485`** (this component) | first byte of the frame_type | `payload[0]` |
+| [swilson/aqualogic](https://github.com/swilson/aqualogic) | first byte **after** the frame_type | `payload[2]` (for 2-byte frame_type) |
+| [earlephilhower/aquaweb](https://github.com/earlephilhower/aquaweb) | mixed; see the Python source for each frame | translate per-field |
+| Raw bus capture (Wireshark, dump_frames log) | `DLE` itself | DLE+STX are stripped before `payload[0]` |
+
+When publishing your own reverse-engineering findings, state the convention
+explicitly ("offsets are payload-relative: `payload[0..1]` = frame_type, data
+starts at `payload[2]`") — it costs one sentence and saves every reader an
+off-by-two debugging session.
 
 ## Getting started with an unknown bus
 
