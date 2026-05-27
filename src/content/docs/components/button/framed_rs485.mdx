@@ -13,11 +13,11 @@ bus when pressed. It requires the [Framed RS-485](/components/framed_rs485/) hub
 
 Each button corresponds to a **key code** — a 32-bit value that identifies which
 physical button was pressed on the original controller panel. When you press the
-button in Home Assistant, the ESP32 queues the key frame and transmits it during
+button in Home Assistant, the device queues the key frame and transmits it during
 the next TX gate window (typically the controller's keep-alive frame, around
 every 500 ms for Hayward AquaLogic).
 
-The controller receives the key event and decides what happens next. The ESP32
+The controller receives the key event and decides what happens next. The device
 cannot know the outcome until it reads the next LED status frame, which is why
 commands are modelled as buttons rather than switches.
 
@@ -60,9 +60,10 @@ button:
 ```
 
 Use the corresponding LED binary sensors to read the actual resulting state.
-When multiple LEDs share the same status frame, decode once in `on_frame:` and push
-to `template` sensors — see the [binary sensor docs](/components/binary_sensor/framed_rs485/)
-for the full pattern. For a single LED:
+LED state lives in a status frame from the controller; decode it in `on_frame:`
+on the hub and push to `template` sensors — see the
+[Basic usage example](/components/framed_rs485/#basic-usage) for the LED-mask
+pattern. For a single LED:
 
 ```yaml
 framed_rs485:

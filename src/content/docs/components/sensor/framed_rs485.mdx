@@ -1,41 +1,38 @@
 ---
-description: "Instructions for setting up framed_rs485 sensors."
+description: "Instructions for setting up framed_rs485 diagnostic sensors."
 title: "Framed RS-485 Sensor"
 params:
   seo:
-    description: Instructions for setting up framed_rs485 sensors to decode numeric values from a DLE-framed RS-485 bus.
+    description: Instructions for setting up framed_rs485 diagnostic sensors that expose hub counters and statistics.
 ---
 
-The `framed_rs485` sensor platform reads numeric values from a DLE-framed RS-485 bus.
-It requires the [Framed RS-485](/components/framed_rs485/) hub to be configured.
+The `framed_rs485` sensor platform exposes hub-state diagnostics (frame counters,
+CRC failures, queue depth, etc.) as Home Assistant sensors. It requires the
+[Framed RS-485](/components/framed_rs485/) hub to be configured.
+
+User payload decoding is **not** done on this platform. To decode the contents
+of received frames, use [`on_frame:` on the hub](/components/framed_rs485/#configuration-variables)
+with `platform: template` sensors — that pattern handles every case from a
+single bit-field LED mask through a multi-field temperature/text frame.
 
 ## Configuration variables
 
 - **framed_rs485_id** (**Required**, [ID](/guides/configuration-types#id)): The ID of the `framed_rs485` hub.
-- **frame_type** (**Required**, list of hex bytes): Frame-type prefix to match against the start of each received
-  payload. Use `[]` to match every frame. Conventionally one or two bytes; up to eight bytes are accepted.
-- **decode** (*Optional*, string): Built-in decoder. Defaults to `uint8`.
+- **decode** (**Required**, string): Which hub diagnostic value to publish.
 
-  | decode | Required extras | Description |
-  |---|---|---|
-  | `uint8` | `offset` | Unsigned 8-bit value at payload byte `offset`. |
-  | `uint16_be` | `offset` | Unsigned 16-bit big-endian value at bytes `offset`..`offset+1`. |
-  | `uint16_le` | `offset` | Unsigned 16-bit little-endian value at bytes `offset`..`offset+1`. |
-  | `uint32_be` | `offset` | Unsigned 32-bit big-endian value at bytes `offset`..`offset+3`. |
-  | `uint32_le` | `offset` | Unsigned 32-bit little-endian value at bytes `offset`..`offset+3`. |
-  | `bcd` | `offset` | BCD-encoded byte at payload byte `offset`. |
-  | `frames_received` | — | Running count of validated frames received. |
-  | `crc_failures` | — | Running count of CRC failures. |
-  | `commands_sent` | — | Running count of TX frames sent. |
-  | `command_drops` | — | Running count of dropped commands. |
-  | `last_keepalive_ms` | — | Interval between the two most recent gate frames in ms. |
-  | `queue_depth` | — | Current TX queue depth. |
-
-- **offset** (*Optional*, integer): Payload byte index for `uint8`, `uint16_*`, `uint32_*`, and `bcd` decoders. Defaults to `0`.
-- **lambda** (*Optional*, [lambda](/guides/automations#lambda)): Custom decode function. Overrides `decode` when present.
-  Signature: `optional<float>(const std::vector<uint8_t> &payload)`. Return `{}` to publish nothing.
+  | decode | Description |
+  |---|---|
+  | `frames_received` | Running count of validated frames received. |
+  | `crc_failures` | Running count of frames that failed validation (CRC mismatch or structural). |
+  | `commands_sent` | Running count of user commands transmitted (idle keepalives are not counted). |
+  | `command_drops` | Running count of commands dropped (queue full or sniffer mode). |
+  | `last_keepalive_ms` | Measured interval between the two most recent gate frames, in ms. |
+  | `queue_depth` | Current TX queue depth (including any pending delayed frame). |
 
 All other options from [Sensor](/components/sensor/#base-sensor-configuration).
+
+Sensors publish on change only. A counter that has not advanced does not generate
+API traffic, so no `throttle` filter is required for steady-state operation.
 
 ## Example
 
@@ -43,168 +40,28 @@ All other options from [Sensor](/components/sensor/#base-sensor-configuration).
 sensor:
   - platform: framed_rs485
     framed_rs485_id: pool
-    name: "ePump RPM"
-    frame_type: [0x00, 0x1F]
-    decode: uint16_be
-    offset: 6
-    unit_of_measurement: RPM
-    accuracy_decimals: 0
-    filters:
-      - throttle: 5s
-
-  - platform: framed_rs485
-    framed_rs485_id: pool
     name: "Frames Received"
-    frame_type: []
     decode: frames_received
-    entity_category: diagnostic
-    accuracy_decimals: 0
-    state_class: total_increasing
-    filters:
-      - throttle: 30s
 
   - platform: framed_rs485
     framed_rs485_id: pool
-    name: "SWG Salt PPM"
-    frame_type: [0x00, 0x16]
-    lambda: |-
-      if (payload.size() < 3) return {};
-      return float(payload[2]) * 100.0f;
-    unit_of_measurement: ppm
-    accuracy_decimals: 0
-```
+    name: "CRC Failures"
+    decode: crc_failures
 
-## Protocol-specific decode patterns
-
-When multiple sensors read from the same frame type, decode the frame once in an `on_frame:`
-handler on the hub and push values to `template` sensors. This is cleaner than repeating
-the same decode logic in every sensor's `lambda:`.
-
-**Hayward AquaLogic: temperatures and VSP from shared frames**
-
-The display frame (`0x01 0x03`) carries pool temperature, air temperature, and display text.
-The VSP frames carry speed and power. One `on_frame:` handler per frame type covers all sensors:
-
-```yaml
-framed_rs485:
-  id: pool
-  on_frame:
-    - frame_type: [0x01, 0x03]
-      then:
-        - lambda: |-
-            // Decode into a stack buffer -- no heap allocation during extraction.
-            // Text sensors deduplicate internally; numeric sensors use throttle filters.
-            char text[32] = {};
-            uint8_t tlen = 0;
-            for (size_t i = 3; i < payload.size() && tlen < 30; i++) {
-              uint8_t b = payload[i];
-              if (b > 0x7F) b -= 0x80;
-              if (b == 0) continue;
-              if (b == '_') {
-                if (tlen + 2 <= 30) { text[tlen++] = '\xC2'; text[tlen++] = '\xB0'; }
-              } else {
-                text[tlen++] = char(b);
-              }
-            }
-            while (tlen > 0 && text[tlen - 1] == ' ') tlen--;
-            text[tlen] = '\0';
-            id(display_text).publish_state(std::string(text, tlen));
-            // Guard on "Temp" to prevent false matches when "Pool" or "Air" appear
-            // on other screens in a different context.
-            if (strstr(text, "Temp")) {
-              const char *p = strstr(text, "Pool");
-              if (p) {
-                p += 4; while (*p == ' ') p++;
-                float v = 0; bool ok = false;
-                while (*p >= '0' && *p <= '9') { v = v * 10.0f + float(*p++ - '0'); ok = true; }
-                if (ok) id(pool_temp).publish_state(v);
-              }
-              p = strstr(text, "Air");
-              if (p) {
-                p += 3; while (*p == ' ') p++;
-                float v = 0; bool ok = false;
-                while (*p >= '0' && *p <= '9') { v = v * 10.0f + float(*p++ - '0'); ok = true; }
-                if (ok) id(air_temp).publish_state(v);
-              }
-            }
-
-    - frame_type: [0x0c, 0x01]
-      then:
-        - lambda: |-
-            if (payload.size() < 4) return;
-            id(vsp_speed).publish_state(float(payload[3]));
-
-    - frame_type: [0x00, 0x0c]
-      then:
-        - lambda: |-
-            if (payload.size() < 5) return;
-            uint32_t watts = 0;
-            for (size_t i = 2; i < 5; i++)
-              watts = watts * 100 + uint32_t(payload[i] >> 4) * 10 + uint32_t(payload[i] & 0x0F);
-            id(vsp_power).publish_state(float(watts));
-
-sensor:
-  - platform: template
-    id: pool_temp
-    name: "Pool Temperature"
-    unit_of_measurement: "°F"
-    device_class: temperature
-    accuracy_decimals: 0
-
-  - platform: template
-    id: air_temp
-    name: "Air Temperature"
-    unit_of_measurement: "°F"
-    device_class: temperature
-    accuracy_decimals: 0
-
-  - platform: template
-    id: vsp_speed
-    name: "VSP Commanded Speed"
-    unit_of_measurement: "%"
-    accuracy_decimals: 0
-
-  - platform: template
-    id: vsp_power
-    name: "VSP Power"
-    unit_of_measurement: W
-    device_class: power
-    accuracy_decimals: 0
-
-text_sensor:
-  - platform: template
-    id: display_text
-    name: "Display"
-```
-
-**When to use per-sensor `lambda:` instead**
-
-Use a `framed_rs485` sensor with `lambda:` only when a single sensor maps one-to-one with
-a unique frame type and no other sensor needs that frame. Example — a salt cell that is the
-only consumer of its status frame:
-
-```yaml
-sensor:
   - platform: framed_rs485
     framed_rs485_id: pool
-    name: "SWG Salt PPM"
-    frame_type: [0x00, 0x16]
-    lambda: |-
-      if (payload.size() < 3) return {};
-      return float(payload[2]) * 100.0f;
-    unit_of_measurement: ppm
-    accuracy_decimals: 0
+    name: "Queue Depth"
+    decode: queue_depth
 ```
 
-## Rate limiting
+## Interpreting the counters
 
-`publish_state` is called on every matching frame. For sensors that fire at bus
-frequency (~10 Hz), use ESPHome `filters:` to reduce network traffic:
-
-```yaml
-filters:
-  - throttle: 30s
-```
-
-Use `heartbeat` instead of `throttle` if you need the most-recent value delivered
-on the next poll rather than simply dropping updates.
+- A rising `crc_failures` with zero `frames_received` usually means the wrong
+  baud rate or UART settings.
+- A small steady `crc_failures` alongside healthy `frames_received` suggests
+  `crc.type` or `crc.rx_accept` needs adjustment.
+- `command_drops` should stay at 0 in normal operation. With `queue_policy: replace_latest`,
+  every press that arrives while another command is pending increments the counter — useful for
+  detecting button mash. With `queue_policy: fifo`, drops indicate the queue is too small.
+- `last_keepalive_ms` shows the bus poll interval. Sudden changes here often
+  indicate bus contention or controller reboots.
