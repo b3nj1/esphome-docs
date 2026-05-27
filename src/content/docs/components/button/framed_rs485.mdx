@@ -15,7 +15,7 @@ Each button corresponds to a **key code** — a 32-bit value that identifies whi
 physical button was pressed on the original controller panel. When you press the
 button in Home Assistant, the device queues the key frame and transmits it during
 the next TX gate window (typically the controller's keep-alive frame, around
-every 500 ms for Hayward AquaLogic).
+every 100 ms for Hayward AquaLogic).
 
 The controller receives the key event and decides what happens next. The device
 cannot know the outcome until it reads the next LED status frame, which is why

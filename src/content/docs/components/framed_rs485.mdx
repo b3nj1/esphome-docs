@@ -7,9 +7,15 @@ params:
 ---
 
 The `framed_rs485` hub lets an ESPHome device participate in DLE-framed RS-485
-buses. It validates frames locally, exposes hub diagnostics as Home Assistant
-entities, and queues outbound commands so they transmit during the controller's
-keep-alive window.
+buses. It received validates frames locally and enables decode of frames to expose state of
+devices on the bus as Home Assistant entities (eg, pool water temperature).
+It queues outbound commands so they transmit during the narrow timing
+window of the controller's keep-alive window (eg, a Home Assistant button
+entity to turn on the pool lights). Compared to performing these operations
+with a USB/TCP serial based app or even a ESPHome Serial Proxy, these capabilities provide
+reliable delivery of commands, low latency feedback to observe side-effect
+of issued commands, and event reduction by exposing Home Assistatn to
+low-frequency state instead of high-frequency frames.
 
 Profiles bundle correct defaults for known controllers. Custom framing bytes,
 CRC algorithms, TX gate behaviour, and user-supplied frame decoders (via
@@ -56,20 +62,15 @@ queue depth) are exposed through the `framed_rs485` sensor and text_sensor
 platforms.
 
 ```yaml
-esp32:
-  board: esp32dev
-  framework:
-    type: esp-idf
-
 uart:
   id: pool_uart
   tx_pin: GPIO17
-  rx_pin: GPIO16
+  rx_pin: GPIO18
   baud_rate: 19200
   data_bits: 8
   parity: NONE
   stop_bits: 2
-  flow_control_pin: GPIO4   # DE/RE pin; omit if your adapter auto-manages direction
+  flow_control_pin: GPIO21  # DE/RE pin; omit if your adapter auto-manages direction
 
 framed_rs485:
   id: pool
@@ -176,16 +177,18 @@ For broader background, see [ESPHome Lambda Magic](/automations/templates.md#lam
 
 ## Hardware setup
 
-Use an RS-485-to-TTL adapter connected to a UART on your ESPHome device. See
-the [UART](/components/uart/) component for wiring details.
+Use an RS-485-to-TTL adapter connected to a UART on your ESPHome device, or
+an integrated device like WaveShare's ESP32-S3-RS485-CAN which has both the
+RS-485-to-TTL and an ESP32-S3. See the [UART](/components/uart/) component
+for wiring details.
 
 ```
 GPIO17 (TX) → DI  (adapter data-in)
-GPIO16 (RX) → RO  (adapter data-out)
-GPIO4       → DE + RE tied (half-duplex direction control)
-3.3 V or 5 V → VCC (match adapter supply voltage)
-GND          → GND
-A / B        → RS-485 bus terminals
+GPIO18 (RX) → RO  (adapter data-out)
+GPIO21      → DE + RE tied (half-duplex direction control)
+DC Supply   → VCC (match adapter supply voltage)
+GND         → GND
+A / B       → RS-485 bus terminals
 ```
 
 For half-duplex adapters with a DE/RE pin, set `flow_control_pin` on the
@@ -196,7 +199,7 @@ automatically.
 
 ```yaml
 uart:
-  flow_control_pin: GPIO4   # DE/RE direction pin
+  flow_control_pin: GPIO21  # DE/RE direction pin
 ```
 
 If you receive no data, try swapping `tx_pin`/`rx_pin` or the A/B bus wires.
@@ -206,7 +209,7 @@ of the device's.
 ## Profiles
 
 Profiles set correct UART settings, gate frame defaults, and key-frame format
-automatically.
+automatically. The profile is the device we are attempting to mimic.
 
 | Profile | UART | CRC | Key format | Default gate frame |
 |---|---|---|---|---|
