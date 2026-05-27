@@ -1,16 +1,16 @@
 ---
-description: "Instructions for setting up the Framed RS-485 hub component for DLE-framed RS-485 buses (Hayward AquaLogic, Jandy AquaLink, and others)."
-title: "Framed RS-485"
+description: "Instructions for setting up the RS485 Frame hub component for DLE-framed RS485 buses (Hayward AquaLogic, Jandy AquaLink, and others)."
+title: "RS485 Frame"
 params:
   seo:
-    description: Instructions for setting up the Framed RS-485 hub component for DLE-framed RS-485 buses including Hayward AquaLogic and Jandy AquaLink RS.
+    description: Instructions for setting up the RS485 Frame hub component for DLE-framed RS-485 / RS485 buses including Hayward AquaLogic and Jandy AquaLink RS.
 ---
 
-The `framed_rs485` hub enables an ESPHome device to participate in DLE-framed
-RS-485 buses. It receives and validates frames locally, allowing it to decode
+The `rs485_frame` hub enables an ESPHome device to participate in DLE-framed
+RS485 buses. It receives and validates frames locally, allowing it to decode
 them and expose the state of devices on the bus as Home Assistant entities
 (e.g., pool water temperature). It also queues outbound commands so they
-transmit precisely during the narrow timing window of the controller’s
+transmit precisely during the narrow timing window of the controller's
 keep-alive window (e.g., a Home Assistant button entity to turn on the pool
 lights). Compared to performing these operations with a USB/TCP serial-based
 app or an ESPHome Serial Proxy, these capabilities provide reliable command
@@ -35,7 +35,7 @@ esp32:
 ```
 
 When `flow_control_pin` is set on the `uart:` component under ESP-IDF, the
-device's UART peripheral enters hardware RS-485 half-duplex mode
+device's UART peripheral enters hardware RS485 half-duplex mode
 (`UART_MODE_RS485_HALF_DUPLEX`). The hardware asserts the DE/RE pin exactly when
 the TX FIFO fills and deasserts only after the **shift register** finishes
 clocking out the last bit — sub-bit precision that no software loop can match.
@@ -43,14 +43,14 @@ clocking out the last bit — sub-bit precision that no software loop can match.
 Under the Arduino framework the `uart:` component does **not** drive
 `flow_control_pin`. Arduino users must therefore use an **auto-DE transceiver
 chip** (e.g. MAX13487, MAX22025) where DE follows the TX line state
-automatically. With auto-DE hardware, the `framed_rs485` TX path calls
+automatically. With auto-DE hardware, the `rs485_frame` TX path calls
 `Serial::flush()` after each frame to keep the TX line active for the full
 frame duration; on ESP-IDF the flush is omitted because the hardware mode
 already handles deassertion timing.
 
 `idle_gap` TX gate mode is sensitive to echo on the RX line — each transmitted
 frame updates `last_rx_time_` via the echo, which resets the idle timer and may
-prevent `idle_gap` from ever firing again. ESP-IDF's hardware RS-485 mode
+prevent `idle_gap` from ever firing again. ESP-IDF's hardware RS485 mode
 suppresses TX echo automatically; on Arduino, prefer `frame_trigger` or
 `fixed_delay`, or use a transceiver that suppresses local echo in hardware.
 
@@ -59,7 +59,7 @@ suppresses TX echo automatically; on Arduino, prefer `frame_trigger` or
 Minimal Hayward AquaLogic configuration. User payload decoding is done via
 `on_frame:` on the hub — one lambda per frame type, pushing values to
 `platform: template` sensors. Hub diagnostics (frame counters, CRC failures,
-queue depth) are exposed through the `framed_rs485` sensor and text_sensor
+queue depth) are exposed through the `rs485_frame` sensor and text_sensor
 platforms.
 
 ```yaml
@@ -73,7 +73,7 @@ uart:
   stop_bits: 2
   flow_control_pin: GPIO21  # DE/RE pin; omit if your adapter auto-manages direction
 
-framed_rs485:
+rs485_frame:
   id: pool
   uart_id: pool_uart
   profile: hayward_aqualogic_wireless
@@ -132,8 +132,8 @@ text_sensor:
     name: "Display"
 
 button:
-  - platform: framed_rs485
-    framed_rs485_id: pool
+  - platform: rs485_frame
+    rs485_frame_id: pool
     name: "Filter"
     command: 0x80000000
 ```
@@ -178,9 +178,9 @@ For broader background, see [ESPHome Lambda Magic](/automations/templates.md#lam
 
 ## Hardware setup
 
-Use an RS-485-to-TTL adapter connected to a UART on your ESPHome device, or
+Use an RS485-to-TTL adapter connected to a UART on your ESPHome device, or
 an integrated device like WaveShare's ESP32-S3-RS485-CAN which has both the
-RS-485-to-TTL and an ESP32-S3. See the [UART](/components/uart/) component
+RS485-to-TTL and an ESP32-S3. See the [UART](/components/uart/) component
 for wiring details.
 
 ```
@@ -189,12 +189,12 @@ GPIO18 (RX) → RO  (adapter data-out)
 GPIO21      → DE + RE tied (half-duplex direction control)
 DC Supply   → VCC (match adapter supply voltage)
 GND         → GND
-A / B       → RS-485 bus terminals
+A / B       → RS485 bus terminals
 ```
 
 For half-duplex adapters with a DE/RE pin, set `flow_control_pin` on the
-**`uart:` component** (not on `framed_rs485:`). Under ESP-IDF this activates
-the UART peripheral's built-in RS-485 half-duplex mode; the hardware drives
+**`uart:` component** (not on `rs485_frame:`). Under ESP-IDF this activates
+the UART peripheral's built-in RS485 half-duplex mode; the hardware drives
 DE with shift-register-level precision and suppresses the TX echo on RX
 automatically.
 
@@ -218,10 +218,10 @@ automatically. The profile is the device we are attempting to mimic.
 | `hayward_aqualogic_wired_remote` | 19200 8N2 | sum16 payload-only | wired remote | `[0x01, 0x01]` |
 | `hayward_aqualogic_wired_local` | 19200 8N2 | sum16 payload-only | wired local | `[0x01, 0x01]` |
 | `jandy_aqualink_rs` | 9600 8N1 | sum8 header-inclusive | jandy_allbutton | `[0x08, 0x00]` (AllButton probe) |
-| `generic_framed_rs485` | any | manual | manual | `[0x01, 0x01]` |
+| `generic_rs485_frame` | any | manual | manual | `[0x01, 0x01]` |
 
 Hayward and Jandy profiles enforce UART settings at config-validation time.
-Use `generic_framed_rs485` to bypass validation for custom buses.
+Use `generic_rs485_frame` to bypass validation for custom buses.
 
 `jandy_aqualink_rs` additionally requires `tx.idle_command` (typically `0x00`)
 unless `sniffer_only: true`. The AllButton emulator must ACK every probe
@@ -253,7 +253,7 @@ within the Jandy poll cycle or the controller will mark it offline.
   `payload_only` computes the CRC over the unescaped payload only (Hayward wired remotes).
 
 - **key_format** (*Optional*, string): Button command encoding. Set automatically by the active
-  profile; only needed when using `generic_framed_rs485` with buttons.
+  profile; only needed when using `generic_rs485_frame` with buttons.
 
   | Value | Used by |
   |---|---|
@@ -310,7 +310,7 @@ lambda: |-
 
 ### Offset convention: payload-relative
 
-`framed_rs485` uses **payload-relative** byte offsets: `payload[0]` is the
+`rs485_frame` uses **payload-relative** byte offsets: `payload[0]` is the
 first byte of the `frame_type` prefix. For the typical 2-byte frame_type, the
 first data byte is at `payload[2]`. This matches what the lambda actually
 receives at the C++ level — the `payload` vector has already had the DLE+STX
@@ -324,7 +324,7 @@ frame_type before counting, so what they call "byte 0" of the frame is our
 
 | Source | Their "byte 0" of the frame | Equivalent in our `payload[]` |
 |---|---|---|
-| **`framed_rs485`** (this component) | first byte of the frame_type | `payload[0]` |
+| **`rs485_frame`** (this component) | first byte of the frame_type | `payload[0]` |
 | [swilson/aqualogic](https://github.com/swilson/aqualogic) | first byte **after** the frame_type | `payload[2]` (for 2-byte frame_type) |
 | [earlephilhower/aquaweb](https://github.com/earlephilhower/aquaweb) | mixed; see the Python source for each frame | translate per-field |
 | Raw bus capture (Wireshark, dump_frames log) | `DLE` itself | DLE+STX are stripped before `payload[0]` |
@@ -347,27 +347,27 @@ specific controllers.
 ### Step 2: Flash a passive sniffer
 
 Create a YAML with `sniffer_only: true`, `dump_frames: true`, and
-`profile: generic_framed_rs485`. Set `crc: {type: none}` so every framing-valid
+`profile: generic_rs485_frame`. Set `crc: {type: none}` so every framing-valid
 frame is logged regardless of CRC.
 
 ```yaml
-framed_rs485:
+rs485_frame:
   id: bus
   uart_id: bus_uart
-  profile: generic_framed_rs485
+  profile: generic_rs485_frame
   sniffer_only: true
   dump_frames: true
   crc:
     type: none
 
 text_sensor:
-  - platform: framed_rs485
-    framed_rs485_id: bus
+  - platform: rs485_frame
+    rs485_frame_id: bus
     name: "Last Frame Type"
 
 sensor:
-  - platform: framed_rs485
-    framed_rs485_id: bus
+  - platform: rs485_frame
+    rs485_frame_id: bus
     name: "Frames Received"
     decode: frames_received
     filters:
@@ -379,9 +379,9 @@ sensor:
 With `dump_frames: true` and logger at DEBUG level, each validated frame is logged:
 
 ```
-[D][framed_rs485:xxx]: RX 010101
-[D][framed_rs485:xxx]: RX 0102010200000800000800
-[D][framed_rs485:xxx]: RX 010301035000506f6f6c2054...
+[D][rs485_frame:xxx]: RX 010101
+[D][rs485_frame:xxx]: RX 0102010200000800000800
+[D][rs485_frame:xxx]: RX 010301035000506f6f6c2054...
 ```
 
 The first four hex chars are the two-byte frame type. Collect these over a few
@@ -400,7 +400,7 @@ of interest, plus `template` sensors that receive the decoded values via
 
 ## Diagnostics
 
-The `framed_rs485` sensor and text_sensor platforms expose hub-state diagnostics
+The `rs485_frame` sensor and text_sensor platforms expose hub-state diagnostics
 as Home Assistant entities. They do **not** decode user payloads — for that, use
 `on_frame:`.
 
@@ -418,19 +418,19 @@ The text_sensor exposes one diagnostic: the most recent validated frame type as 
 
 ```yaml
 sensor:
-  - platform: framed_rs485
-    framed_rs485_id: pool
+  - platform: rs485_frame
+    rs485_frame_id: pool
     name: "Frames Received"
     decode: frames_received
 
-  - platform: framed_rs485
-    framed_rs485_id: pool
+  - platform: rs485_frame
+    rs485_frame_id: pool
     name: "CRC Failures"
     decode: crc_failures
 
 text_sensor:
-  - platform: framed_rs485
-    framed_rs485_id: pool
+  - platform: rs485_frame
+    rs485_frame_id: pool
     name: "Last Frame Type"
 ```
 
@@ -440,16 +440,16 @@ rate or UART settings. A small steady `crc_failures` alongside healthy
 
 ## Why buttons, not switches
 
-Commands are **buttons** because they are keypress events on the RS-485 bus — the
+Commands are **buttons** because they are keypress events on the RS485 bus — the
 controller decides the resulting state. Read LED state through Home Assistant
 binary sensors driven by your `on_frame:` LED-mask handler for the ground truth
 on what is on or off.
 
 ## See also
 
-- [framed\_rs485-examples](https://github.com/b3nj1/framed_rs485-examples) — ready-to-use configurations for Hayward AquaLogic and Jandy AquaLink RS controllers.
-- [framed_rs485 sensor](/components/sensor/framed_rs485/) — hub diagnostic sensors.
-- [framed_rs485 text\_sensor](/components/text_sensor/framed_rs485/) — `last_frame_type` diagnostic.
-- [framed_rs485 button](/components/button/framed_rs485/)
-- [framed_rs485 number](/components/number/framed_rs485/)
+- [rs485-frame-examples](https://github.com/b3nj1/rs485-frame-examples) — ready-to-use configurations for Hayward AquaLogic and Jandy AquaLink RS controllers.
+- [rs485_frame sensor](/components/sensor/rs485_frame/) — hub diagnostic sensors.
+- [rs485_frame text\_sensor](/components/text_sensor/rs485_frame/) — `last_frame_type` diagnostic.
+- [rs485_frame button](/components/button/rs485_frame/)
+- [rs485_frame number](/components/number/rs485_frame/)
 - [UART](/components/uart/)

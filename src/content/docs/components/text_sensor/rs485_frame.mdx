@@ -1,25 +1,25 @@
 ---
-description: "Instructions for setting up the framed_rs485 last_frame_type diagnostic text sensor."
-title: "Framed RS-485 Text Sensor"
+description: "Instructions for setting up the RS485 Frame last_frame_type diagnostic text sensor."
+title: "RS485 Frame Text Sensor"
 params:
   seo:
-    description: Instructions for setting up the framed_rs485 last_frame_type diagnostic text sensor.
+    description: Instructions for setting up the RS485 Frame last_frame_type diagnostic text sensor.
 ---
 
-The `framed_rs485` text_sensor platform exposes a single hub diagnostic: the
+The `rs485_frame` text_sensor platform exposes a single hub diagnostic: the
 type of the most recently validated frame, as a 4-character hex string (e.g.
-`"0083"`, no separator). It requires the [Framed RS-485](/components/framed_rs485/)
+`"0083"`, no separator). It requires the [RS485 Frame](/components/rs485_frame/)
 hub to be configured.
 
 This is useful for catalogueing frame types on an unknown bus during the
 discovery workflow. For user payload decoding, use [`on_frame:` on the
-hub](/components/framed_rs485/#configuration-variables) — that handles every
+hub](/components/rs485_frame/#configuration-variables) — that handles every
 text-decoding case from a single ASCII frame through Hayward AquaLogic's
 blink-bit-and-degree-symbol display encoding.
 
 ## Configuration variables
 
-- **framed_rs485_id** (**Required**, [ID](/guides/configuration-types#id)): The ID of the `framed_rs485` hub.
+- **rs485_frame_id** (**Required**, [ID](/guides/configuration-types#id)): The ID of the `rs485_frame` hub.
 
 All other options from [Text Sensor](/components/text_sensor/#base-text-sensor-configuration).
 
@@ -29,8 +29,8 @@ The sensor publishes only on change — a steady-state bus produces no API traff
 
 ```yaml
 text_sensor:
-  - platform: framed_rs485
-    framed_rs485_id: pool
+  - platform: rs485_frame
+    rs485_frame_id: pool
     name: "Last Frame Type"
 ```
 
