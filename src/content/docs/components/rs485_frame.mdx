@@ -122,10 +122,12 @@ binary_sensor:
   - platform: template
     id: led_filter
     name: "Filter LED"
+    device_class: running
 
   - platform: template
     id: led_lights
     name: "Lights LED"
+    device_class: light
 
 text_sensor:
   - platform: template
@@ -393,6 +395,8 @@ sensor:
     rs485_frame_id: bus
     name: "Frames Received"
     decode: frames_received
+    # The rs485_frame sensor platform fills in state_class, unit_of_measurement, and
+    # entity_category automatically per decode value — no extra YAML needed.
     filters:
       - throttle: 10s
 ```
@@ -482,17 +486,22 @@ The `rs485_frame` sensor and text_sensor platforms expose hub-state diagnostics
 as Home Assistant entities. They do **not** decode user payloads — for that, use
 `on_frame:`.
 
-| sensor `decode` | Description |
-|---|---|
-| `frames_received` | Running count of validated frames received |
-| `crc_failures` | Running count of frames that failed validation (CRC or structural) |
-| `commands_sent` | Running count of user commands transmitted (idle keepalives are not counted) |
-| `command_drops` | Running count of commands dropped (queue full or sniffer mode) |
-| `last_keepalive_ms` | Measured interval between the two most recent gate frames, in ms |
-| `queue_depth` | Current TX queue depth (including any pending delayed frame) |
+| sensor `decode` | Description | Defaults applied |
+|---|---|---|
+| `frames_received` | Running count of validated frames received | `state_class: total_increasing`, `unit_of_measurement: frames` |
+| `crc_failures` | Running count of frames that failed validation (CRC or structural) | `state_class: total_increasing`, `unit_of_measurement: frames` |
+| `commands_sent` | Running count of user commands transmitted (idle keepalives are not counted) | `state_class: total_increasing`, `unit_of_measurement: commands` |
+| `command_drops` | Running count of commands dropped (queue full or sniffer mode) | `state_class: total_increasing`, `unit_of_measurement: commands` |
+| `last_keepalive_ms` | Measured interval between the two most recent gate frames, in ms | `state_class: measurement`, `unit_of_measurement: ms`, `device_class: duration` |
+| `queue_depth` | Current TX queue depth (including any pending delayed frame) | `state_class: measurement`, `unit_of_measurement: frames` |
+
+All diagnostic sensors are emitted with `entity_category: diagnostic` so Home
+Assistant groups them under the device's Diagnostic section. You can override
+any of the defaults above by setting the same key explicitly in your YAML.
 
 The text_sensor exposes one diagnostic: the most recent validated frame type as a
-4-character hex string (e.g. `"0083"`, no separator). It publishes only on change.
+4-character hex string (e.g. `"0083"`, no separator). It also defaults to
+`entity_category: diagnostic` and publishes only on change.
 
 ```yaml
 sensor:
