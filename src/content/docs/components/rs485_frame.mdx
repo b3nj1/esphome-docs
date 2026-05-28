@@ -279,15 +279,26 @@ within the Jandy poll cycle or the controller will mark it offline.
   if your installation has multiple wired keypads configured. Only meaningful when `key_format`
   is `wired_local` or `wired_remote`.
 
-  Notes on choosing:
+  Once you override `wired_sub_type`, the `wired_local` vs `wired_remote` key formats are
+  equivalent — both produce the same payload layout (10-byte: 2-byte frame type + 4-byte
+  command × 2) and use sum16 header-inclusive CRC. The distinction is purely about which
+  default sub-type the profile picks for you.
 
-  - `0x02` (wired_local default) impersonates the main panel itself. Convenient on a stock
-    single-panel install, but can collide on the wire when the user physically presses a
-    key on the panel at the same instant the hub transmits a command.
-  - `0x03` (wired_remote default) impersonates the OEM-registered second wired keypad. Safer
-    on installs that have a wired remote configured in the AquaLogic system setup; rejected
-    if no such device is registered.
-  - `0x04`+ for additional units. Verify with `sniffer_stats` against your actual hardware.
+  What we've observed on a live Hayward AquaLogic / ProLogic bus:
+
+  - `0x02` (wired_local default) — full command set accepted (Lights, Filter, AUX 1-N,
+    Heater, Valve 4, Menu navigation, etc.). Impersonates the main panel itself, so the
+    HA-injected frame can collide with the physical panel's own keypress traffic during
+    simultaneous use; the controller still typically accepts our frame in that case but
+    the panel's own press may be lost.
+  - `0x03` (wired_remote default) — full command set accepted, and avoids the main-panel
+    collision. Recommended default when your AquaLogic system setup has registered a
+    wired remote (which most installations do, even if no physical remote is wired up).
+  - `0x04` — partial: only menu / navigation buttons accepted. Lights, AUX
+    toggles, and similar action commands are silently ignored. Hayward appears to grant
+    only navigation authority to higher unit addresses.
+
+  Pick `0x03` first; fall back to `0x02` only if your controller rejects `0x03` (rare).
 
 - **on_frame** (*Optional*, [Automation](/guides/automations)): Automation(s) that fire when a
   matching frame is received. Multiple entries may be listed; each fires independently based
