@@ -179,6 +179,86 @@ like Jandy). To keep long-uptime devices stable, follow these patterns:
 
 For broader background, see [ESPHome Lambda Magic](/automations/templates.md#lambda-magic).
 
+## Raw frame transmission
+
+The named profiles (`hayward_aqualogic_*`, `jandy_aqualink_rs`) include `key_format`
+encoders that turn a 32-bit `command:` into the on-wire payload that profile's target
+device expects. For anything those encoders don't cover — `generic_rs485_frame` hubs,
+device-discovery probes, vendor-specific commands, multi-frame setup sequences — the
+component exposes a raw transmission path that hands the hub a frame type and the
+payload bytes directly. The hub still does DLE-STX/ETX wrapping, byte-stuffing, and CRC
+according to the configured `crc.type` and `crc.tx_variant`; only the payload-encoding
+step is the caller's responsibility.
+
+There are two surfaces:
+
+### `rs485_frame.send_frame` action
+
+A general-purpose [Action](/guides/automations) you can invoke from anywhere — scripts,
+on_frame: triggers, template buttons, schedule entries. Both fields are templatable.
+
+```yaml
+script:
+  - id: pulse_aux1
+    then:
+      - rs485_frame.send_frame:
+          id: pool
+          frame_type: [0x00, 0x83]
+          payload: [0x00, 0x01, 0x02, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00]
+
+# Computed payload via lambda — useful when the bytes depend on entity state, a
+# trigger argument, or any other runtime value.
+button:
+  - platform: template
+    name: "Set Pool Setpoint"
+    on_press:
+      - rs485_frame.send_frame:
+          id: pool
+          frame_type: [0x00, 0x42]
+          payload: !lambda |-
+            return std::vector<uint8_t>{
+              0x42, 0x00, static_cast<uint8_t>(id(setpoint).state),
+              0x00, 0x00, 0x00,
+            };
+```
+
+#### Action configuration variables
+
+- **id** (**Required**, [ID](/guides/configuration-types#id)): The ID of the `rs485_frame` hub.
+- **frame_type** (**Required**, list of hex bytes or [Templatable](/guides/automations#templatable-values)): The 2-byte (or longer, up to 8 bytes) frame type prefix.
+- **payload** (**Required**, list of hex bytes or [Templatable](/guides/automations#templatable-values)): The payload bytes that follow the frame type. Caller-composed, not double-encoded.
+
+### Raw form on the button platform
+
+For static frames a template button + action is overkill; the
+[rs485_frame button platform](/components/button/rs485_frame/) also accepts a raw form
+that drops the `command:` field in favour of `frame_type:` + `payload:`. Use this when
+you have a fixed mapping between a button entity and a frame literal — typical for
+generic devices that don't fit one of the named profiles.
+
+```yaml
+button:
+  - platform: rs485_frame
+    rs485_frame_id: pool
+    name: "Custom Probe Frame"
+    frame_type: [0x00, 0x83]
+    payload: [0x00, 0x01, 0x02, 0x00, 0x42, 0x00, 0x00, 0x00, 0x42, 0x00, 0x00, 0x00]
+```
+
+`command:` and (`frame_type:` + `payload:`) are mutually exclusive on the same button.
+The `command:` form encodes via the hub's `key_format` and is only accepted when the
+hub has one set — every named profile supplies one; `generic_rs485_frame` does not
+unless you opt in by setting `key_format:` explicitly.
+
+### When to use which
+
+| You want to... | Use |
+|---|---|
+| Press one of the documented Hayward / Jandy buttons | `button: command:` (uses key_format) |
+| Send a fixed custom frame to a generic device | `button: frame_type: + payload:` |
+| Send a frame computed from entity state or a trigger argument | `rs485_frame.send_frame:` with a lambda payload |
+| Send a multi-frame discovery sequence | several `rs485_frame.send_frame:` actions in a script |
+
 ## Hardware setup
 
 Use an RS485-to-TTL adapter connected to a UART on your ESPHome device, or
@@ -225,7 +305,7 @@ yourself using the row from the table below.
 | `hayward_aqualogic_wired_remote` | 19200 8N2 | sum16 header-inclusive | wired remote (sub-type `0x03`) | `[0x01, 0x01]` |
 | `hayward_aqualogic_wired_local` | 19200 8N2 | sum16 header-inclusive | wired local (sub-type `0x02`) | `[0x01, 0x01]` |
 | `jandy_aqualink_rs` | 9600 8N1 | sum8 header-inclusive | jandy_allbutton | `[0x08, 0x00]` (AllButton probe) |
-| `generic_rs485_frame` | any | manual | manual | `[0x01, 0x01]` |
+| `generic_rs485_frame` | any | manual | none (raw frames) | `[0x01, 0x01]` |
 
 Hayward and Jandy profiles reject a `uart:` block that does not match the
 "Required UART" column. Use `generic_rs485_frame` to bypass that validation
@@ -261,12 +341,17 @@ within the Jandy poll cycle or the controller will mark it offline.
   `header_inclusive` includes DLE+STX in the CRC sum (Hayward wireless).
   `payload_only` computes the CRC over the unescaped payload only (Hayward wired remotes).
 
-- **key_format** (*Optional*, string): Button command encoding. Set automatically by the active
-  profile; only needed when using `generic_rs485_frame` with buttons.
+- **key_format** (*Optional*, string): Button command encoding used by the `command:` form of
+  [rs485_frame buttons](/components/button/rs485_frame/) and by `tx.idle_command`. Set
+  automatically by each named profile; left unset by `generic_rs485_frame`. With no
+  `key_format` (the generic default), the `command:` button form is rejected at config time —
+  use [raw frame transmission](#raw-frame-transmission) (`frame_type:` + `payload:` on the
+  button, or the [`rs485_frame.send_frame` action](#raw-frame-transmission)) instead, or set
+  `key_format:` explicitly to opt into one of the built-in encoders on a generic hub.
 
   | Value | Used by |
   |---|---|
-  | `wireless_12byte` *(default for generic)* | Hayward AquaLogic wireless remote (frame type `0x0083`, 12-byte payload: 3-byte header + 4-byte key × 2 + 1 pad) |
+  | `wireless_12byte` | Hayward AquaLogic wireless remote (frame type `0x0083`, 12-byte payload: 3-byte header + 4-byte key × 2 + 1 pad) |
   | `wired_remote` | Hayward AquaLogic wired remote (frame type `0x0003`, 10-byte payload: 2-byte header + 4-byte command × 2) |
   | `wired_local` | Hayward AquaLogic local wired controller (frame type `0x0002`, same 10-byte layout as wired_remote) |
   | `jandy_allbutton` | Jandy AquaLink RS AllButton frame |
