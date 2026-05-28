@@ -274,9 +274,25 @@ within the Jandy poll cycle or the controller will mark it offline.
   on its `frame_type` filter. The automation receives the payload as `payload`
   (`const std::vector<uint8_t> &`). Use `[]` to match every frame.
 
-  - **frame_type** (**Required**, list of hex bytes): Frame-type prefix to match against the start of each
-    received payload. Use `[]` to match every frame. Conventionally one or two bytes; up to eight bytes
-    are accepted (enforced at config time). See the lambda best-practices section above.
+  - **frame_type** (**Required**, list of hex bytes *or* list of byte-lists): Frame-type
+    prefix(es) to match against the start of each received payload. Two forms are
+    accepted:
+
+    ```yaml
+    # Single prefix — the most common case.
+    frame_type: [0x01, 0x03]
+
+    # List of prefixes — one lambda fires for any of the listed frame types. Useful
+    # when several frame types share the same decode (e.g. two display-screen frame
+    # types with identical payload layouts). Up to 4 alternates per entry.
+    frame_type:
+      - [0x01, 0x03]
+      - [0x01, 0x09]
+    ```
+
+    Use `[]` to match every frame. Each prefix is conventionally one or two bytes; up
+    to eight bytes per prefix are accepted (enforced at config time). See the lambda
+    best-practices section above.
 
 - **tx** (*Optional*): TX and command-queue configuration.
 
