@@ -463,12 +463,14 @@ from the last keep-alive. The row for the reference frame itself always shows
 `-` in the `d-ref` column. Set `reference_frame_type:` explicitly if you want
 to measure delays against a different frame type.
 
-The unique-payload counter grows across periods (it is not reset on dump) so
-you can leave the sniffer running and watch how the universe of distinct
-payloads stabilizes. The `+N` suffix means N additional unique payloads were
-seen but not stored — the per-frame-type capture buffer caps at 4 distinct
-payloads. With `payload_dump_top: N`, the top N frame types by count get
-their captured payloads logged in hex + ASCII immediately after the table.
+Every period starts with an empty payload list and freshly-zeroed counters.
+That way each dump is an independent capture window: press one set of buttons,
+copy the table, then press a different set in the next window without having
+to reboot the ESP. The `+N` suffix on the payloads column means N additional
+unique payloads arrived but did not fit in the per-frame-type capture buffer
+(`max_unique_payloads` slots). With `payload_dump_top: N`, the top N frame
+types by count get their captured payloads logged in hex + ASCII immediately
+after the table, each prefixed by the count of times it was observed.
 
 The whole feature is compiled out of the firmware unless `sniffer_stats:`
 appears in the YAML — production builds pay no flash or RAM cost.
@@ -477,8 +479,15 @@ appears in the YAML — production builds pay no flash or RAM cost.
 
 - **interval** (*Optional*, [Time](/guides/configuration-types#time)): How often to log the table. Defaults to `30s`.
 - **max_frame_types** (*Optional*, integer, 1–64): Maximum distinct frame types tracked. Frame types past this cap are counted as "dropped events" and logged after the table. Defaults to `32`.
+- **max_unique_payloads** (*Optional*, integer, 1–64): Distinct payloads remembered per frame type during one dump period. Additional unique payloads beyond this cap are counted in the `+N` overflow. Defaults to `16`.
+- **payload_capture_bytes** (*Optional*, integer, 1–256): Maximum payload bytes captured per unique sample. Longer payloads are truncated at this length for uniqueness comparison and hex/ASCII display. Defaults to `32`.
 - **payload_dump_top** (*Optional*, integer, 0–32): After the table, dump captured hex+ASCII payloads for the top N frame types by count. `0` (default) disables.
 - **reference_frame_type** (*Optional*, list of hex bytes): Frame type used as the timing reference for the `d-ref` column. Defaults to `tx.gate.frame_type`.
+
+Each tracked frame type holds `max_unique_payloads × payload_capture_bytes`
+of payload buffer plus small bookkeeping. With defaults of 32 frame types ×
+16 payloads × 32 bytes that's ~16 KB during sniffing — fine for ESP32, tight
+on ESP8266 where you'll likely want to lower one of the three knobs.
 
 ## Diagnostics
 
