@@ -81,6 +81,10 @@ uart:
 rs485_frame:
   id: pool
   uart_id: pool_uart
+  framing:
+    escape:
+      mode: escape_byte   # Hayward stuffs a literal DLE as DLE + this byte
+      byte: 0x00
   crc:
     type: sum16
   tx:
@@ -306,12 +310,13 @@ of the device's.
 
 ## Configuring for a specific device
 
-Configure the bus explicitly: set the `uart:` parameters your device uses, choose the `crc:`
-algorithm, set `tx.gate.frame_type` to the bus keep-alive / poll frame, and (only if you want
-the `command:` button shorthand or `tx.idle_command`) add a `command_format:`. The table below
-gives known-good explicit settings for some common buses; copy the relevant column into your
-hub config. Ready-to-flash configurations are maintained in the
-[rs485_frame examples repository](https://github.com/esphome/esphome).
+Configure the bus explicitly: set the `uart:` parameters your device uses, declare the
+`framing.escape` scheme, choose the `crc:` algorithm, set `tx.gate.frame_type` to the bus
+keep-alive / poll frame, and (only if you want the `command:` button shorthand or
+`tx.idle_command`) add a `command_format:`. The table below gives known-good explicit settings
+for some common buses; copy the relevant column into your hub config. Every bus listed uses
+`framing.escape: {mode: escape_byte, byte: 0x00}`. Ready-to-flash configurations are maintained
+in the [rs485_frame examples repository](https://github.com/esphome/esphome).
 
 | Device | UART | `crc` | `tx.gate.frame_type` | `command_format` |
 |---|---|---|---|---|
@@ -341,15 +346,24 @@ marks it offline. `tx.idle_command` requires a `command_format:` (see below).
 - **frame_timeout** (*Optional*, [Time](/guides/configuration-types#time)): Reset receive
   state if a partial frame sits on the bus longer than this. Prevents a noise burst or
   mid-frame cable pull from permanently stalling reception. Defaults to `50ms`.
-- **framing** (*Optional*): Override DLE-framing delimiter bytes. Rarely needed.
+- **framing** (**Required**): DLE-framing configuration. The `escape:` sub-block must be set
+  explicitly; the delimiter bytes default to the de-facto standard but can be overridden.
 
-  `dle`/`stx`/`etx` must be three distinct byte values, and `escape_byte` must differ from
-  `stx` and `etx`; an ambiguous set is rejected at config time.
+  `dle`/`stx`/`etx` must be three distinct byte values, and in `escape_byte` mode the escape
+  `byte` must differ from `stx` and `etx`; an ambiguous set is rejected at config time.
 
   - **dle** (*Optional*, hex byte): Frame delimiter byte. Defaults to `0x10`.
   - **stx** (*Optional*, hex byte): Start-of-frame byte. Defaults to `0x02`.
   - **etx** (*Optional*, hex byte): End-of-frame byte. Defaults to `0x03`.
-  - **escape_byte** (*Optional*, hex byte): Escape suffix for DLE bytes in payload. Defaults to `0x00`.
+  - **escape** (**Required**): How a literal DLE inside the payload (and CRC) is byte-stuffed
+    on the wire. There is no default: the wrong scheme silently corrupts any frame that
+    contains a DLE, and which one a bus uses cannot be inferred, so you must declare it.
+
+    - **mode** (**Required**, string): `escape_byte` — a literal DLE is sent as DLE followed
+      by a marker byte (the scheme Hayward uses); or `double` — a literal DLE is sent as two
+      DLE bytes (the more common DLE-doubling convention).
+    - **byte** (**Required** with `mode: escape_byte`, hex byte): The marker byte emitted after
+      a DLE to mark it as literal data, e.g. `0x00`. Must be omitted when `mode: double`.
 
 - **crc** (**Required**): CRC algorithm configuration. There is no cross-bus default, so this
   block (and its `type`) must be set explicitly.
@@ -547,12 +561,20 @@ Create a YAML with `sniffer_only: true` and `dump_frames: true`. Set
 `crc: {type: none}` so every framing-valid frame is logged regardless of CRC.
 `sniffer_only` hubs need no `tx.gate.frame_type`.
 
+`framing.escape` is still required: pick `mode: double` (DLE doubling, the more common
+convention) or `mode: escape_byte` with the marker byte your bus uses. On a bus you have not
+yet characterized, start with `double`; if payloads decode with stray `0x10` bytes, switch to
+`escape_byte` and re-check.
+
 ```yaml
 rs485_frame:
   id: bus
   uart_id: bus_uart
   sniffer_only: true
   dump_frames: true
+  framing:
+    escape:
+      mode: double
   crc:
     type: none
 
@@ -610,6 +632,9 @@ rs485_frame:
   id: bus
   uart_id: bus_uart
   sniffer_only: true
+  framing:
+    escape:
+      mode: double
   crc:
     type: none
   sniffer_stats:
