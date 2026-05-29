@@ -11,6 +11,10 @@ type of the most recently validated frame, as a 4-character hex string (e.g.
 `"0083"`, no separator). It requires the [RS485 Frame](/components/rs485_frame/)
 hub to be configured.
 
+This tracks **every** validated frame on the bus, not only frames matched by an
+`on_frame:` trigger — so it reflects the last frame type seen on the wire,
+whatever it was.
+
 This is useful for catalogueing frame types on an unknown bus during the
 discovery workflow. For user payload decoding, use [`on_frame:` on the
 hub](/components/rs485_frame/#configuration-variables) — that handles every

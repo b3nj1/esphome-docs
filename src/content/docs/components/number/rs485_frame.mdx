@@ -3,7 +3,8 @@ description: "Instructions for setting up RS485 Frame number entities."
 title: "RS485 Frame Number"
 params:
   seo:
-    description: Instructions for setting up RS485 Frame number entities to send custom-encoded payloads onto a DLE-framed RS485 (RS-485) bus.
+    description: Instructions for setting up RS485 Frame number entities that send custom-encoded payloads onto a
+      DLE-framed RS485 (RS-485) bus.
 ---
 
 The `rs485_frame` number platform sends a raw frame payload onto a DLE-framed
@@ -21,7 +22,7 @@ key command.
 - **max_value** (**Required**, float): Maximum allowed value.
 - **step** (**Required**, float): Step size.
 - **lambda** (**Required**, [lambda](/guides/automations#lambda)): Encodes the numeric value into a raw payload.
-  Signature: `optional<std::vector<uint8_t>>(float value)`. Return `{}` to send nothing.
+  Signature: `optional<std::vector<uint8_t>>(float x)`. Return `{}` to send nothing.
   The returned bytes are wrapped in DLE framing and CRC by the hub before transmission.
 
 All other options from [Number](/components/number/#base-number-configuration).
@@ -38,6 +39,6 @@ number:
     step: 1
     unit_of_measurement: "%"
     lambda: |-
-      uint8_t pct = static_cast<uint8_t>(value);
+      uint8_t pct = static_cast<uint8_t>(x);
       return std::vector<uint8_t>{0x0c, 0x01, 0x00, pct};
 ```
