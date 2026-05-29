@@ -500,6 +500,20 @@ marks it offline. `tx.idle_command` requires a `command_format:` (see below).
     - **interval** (*Optional*, [Time](/guides/configuration-types#time)): TX interval for
       `fixed_delay` mode. Defaults to `100ms`.
 
+- **discovery** (*Optional*): Turn the hub into a passive framing/CRC analyzer for an unknown
+  bus. When present, the hub does no framing, validation, or transmission — it captures raw
+  bytes, segments them into frames by idle gap, and periodically logs candidate framing bytes,
+  the escape scheme, and any CRC scheme that matches consistently (see
+  [Auto-discover framing and CRC](#step-2-auto-discover-framing-and-crc-optional)). With
+  `discovery:` set, `framing.escape` and `crc:` are not required (they are what it discovers),
+  and it cannot be combined with `sniffer_stats:`.
+
+  - **interval** (*Optional*, [Time](/guides/configuration-types#time)): How often the
+    discovery report is logged. Defaults to `30s`.
+  - **idle_gap** (*Optional*, [Time](/guides/configuration-types#time)): Idle time that marks
+    the end of a frame (burst). Roughly three character times at the bus baud rate. Defaults to
+    `5ms`. Raise it if frames are being split, lower it if separate frames are merging.
+
 ## Payload layout
 
 All `on_frame:` handlers receive the same payload byte vector:
@@ -555,7 +569,44 @@ Search for prior work before touching hardware. The HA community forums and GitH
 often have threads with baud rates, framing details, and frame-type catalogs for
 specific controllers.
 
-### Step 2: Flash a passive sniffer
+### Step 2: Auto-discover framing and CRC (optional)
+
+If you do not know the framing bytes at all, enable `discovery:` first. The hub then does no
+framing, validation, or transmission — it passively captures raw bytes, segments them into
+frames by idle gap, and every `interval` logs the candidate `dle`/`stx`/`etx` delimiters, the
+escape scheme, and any CRC scheme that matches consistently across captured frames, ending with
+a ready-to-paste `framing:` block.
+
+```yaml
+rs485_frame:
+  id: bus
+  uart_id: bus_uart
+  discovery: {}        # no framing/crc needed: this is what it discovers
+```
+
+```
+[I][rs485_frame.discovery]: RS485 discovery (cumulative since boot): 412 bursts, 408 matched framing candidate
+[I][rs485_frame.discovery]:   Framing: DLE=0x10 STX=0x02 ETX=0x03  (start pair x408, end pair x408)
+[I][rs485_frame.discovery]:   Escape: escape_byte 0x00 - 100% of 37 in-frame DLEs
+[I][rs485_frame.discovery]:   CRC match: sum16 header_inclusive big-endian (unescaped) - 408/408 frames
+[I][rs485_frame.discovery]:   Suggested framing/escape config:
+[I][rs485_frame.discovery]:     framing:
+[I][rs485_frame.discovery]:       dle: 0x10
+...
+```
+
+Discovery tests the DLE-framing hypothesis. A length-prefixed, fixed-size, or Modbus-style bus
+produces no coherent candidate (the report says so), which itself tells you the bus is not
+DLE-framed. Confidence scales with traffic: a 2-byte CRC is trusted after a handful of frames,
+a 1-byte checksum needs many more (it matches a wrong scheme 1 time in 256 by chance). The
+segmenter resolves idle gaps only at the loop cadence, so very tightly packed frames may merge;
+raise `discovery.idle_gap` if bursts look split, lower it if frames look merged. Feed the
+suggested values into the sniffer in the next step.
+
+`discovery:` cannot be combined with `sniffer_stats:` (which needs the validated-frame path
+discovery bypasses).
+
+### Step 3: Flash a passive sniffer
 
 Create a YAML with `sniffer_only: true` and `dump_frames: true`. Set
 `crc: {type: none}` so every framing-valid frame is logged regardless of CRC.
@@ -594,7 +645,7 @@ sensor:
       - throttle: 10s
 ```
 
-### Step 3: Catalog frame types from logs
+### Step 4: Catalog frame types from logs
 
 With `dump_frames: true` and logger at DEBUG level, each validated frame is logged:
 
@@ -607,12 +658,12 @@ With `dump_frames: true` and logger at DEBUG level, each validated frame is logg
 The first four hex chars are the two-byte frame type. Collect these over a few
 minutes and note cadence. Press physical buttons and watch for new frame types.
 
-### Step 4: Confirm the CRC
+### Step 5: Confirm the CRC
 
 Once you have captured payloads, test CRC candidates. Temporarily set `rx_accept`
 to only one variant and watch whether `crc_failures` climbs.
 
-### Step 5: Configure decoders
+### Step 6: Configure decoders
 
 Replace the sniffer config with `on_frame:` handlers that decode each frame type
 of interest, plus `template` sensors that receive the decoded values via
