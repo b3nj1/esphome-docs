@@ -306,12 +306,11 @@ of the device's.
 
 ## Configuring for a specific device
 
-There are no built-in device profiles. You configure the bus explicitly: set the `uart:`
-parameters your device uses, choose the `crc:` algorithm, set `tx.gate.frame_type` to the
-bus keep-alive / poll frame, and (only if you want the `command:` button shorthand or
-`tx.idle_command`) add a `command_format:`. The table below gives known-good explicit
-settings for some common buses; copy the relevant column into your hub config rather than
-selecting a profile. Ready-to-flash configurations are maintained in the
+Configure the bus explicitly: set the `uart:` parameters your device uses, choose the `crc:`
+algorithm, set `tx.gate.frame_type` to the bus keep-alive / poll frame, and (only if you want
+the `command:` button shorthand or `tx.idle_command`) add a `command_format:`. The table below
+gives known-good explicit settings for some common buses; copy the relevant column into your
+hub config. Ready-to-flash configurations are maintained in the
 [rs485_frame examples repository](https://github.com/esphome/esphome).
 
 | Device | UART | `crc` | `tx.gate.frame_type` | `command_format` |
