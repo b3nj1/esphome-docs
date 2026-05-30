@@ -519,6 +519,19 @@ marks it offline. `tx.idle_command` requires a `command_format:` (see below).
     DLE-framed bus sits at or near 100%; a non-DLE or noisy bus splits its votes across many
     pairs and stays well below. Defaults to `80`. Set to `0` to always print the best guess. CRC
     detection is independent of this gate and always runs against the current top candidate.
+  - **baud_sweep** (*Optional*, list of integers): When present, discovery first sweeps the UART
+    to find the baud rate (see [Auto-detecting the baud rate](#auto-detecting-the-baud-rate)). It
+    cycles through each listed baud rate — crossed with `data_bits_sweep` — holding each for
+    `dwell`, scores the framing, then locks onto the best before continuing normal analysis. Omit
+    it if you already know the baud rate. Runtime UART reconfiguration is implemented on ESP-IDF
+    and ESP8266; on other platforms the sweep cannot change the settings and is skipped.
+  - **data_bits_sweep** (*Optional*, list of integers, 5–8): Data-bit widths tried at each baud
+    rate. RS485 is almost always 8 data bits; `7` is the only other value worth trying on legacy
+    buses. Defaults to `[8]`. Only used when `baud_sweep` is set.
+  - **dwell** (*Optional*, [Time](/guides/configuration-types#time)): Capture time per sweep
+    candidate before it is scored. The framing must converge within this window, so it needs
+    enough traffic. Defaults to `10s`. Raise it for buses with sparse traffic. Only used when
+    `baud_sweep` is set.
 
 ## Payload layout
 
@@ -621,6 +634,55 @@ suggested values into the sniffer in the next step.
 
 `discovery:` cannot be combined with `sniffer_stats:` (which needs the validated-frame path
 discovery bypasses).
+
+#### Auto-detecting the baud rate
+
+If you do not even know the bus baud rate, add `baud_sweep:` to `discovery:`. The hub then cycles
+the UART through each listed baud rate (crossed with `data_bits_sweep`), holds each setting for
+`dwell`, scores the framing with the same machinery described above, and locks onto the
+best-scoring candidate before continuing. The winner is the setting where the framing converges
+and a CRC matches — a wrong baud or data-bit width corrupts every byte, so no checksum can agree
+across frames.
+
+```yaml
+rs485_frame:
+  id: bus
+  uart_id: bus_uart
+  discovery:
+    baud_sweep: [9600, 19200, 38400, 57600, 115200]
+    dwell: 10s          # capture time per candidate; raise it for sparse buses
+```
+
+```
+[I][rs485_frame.discovery]: Starting baud/data-bits sweep: 5 candidate(s), 10000 ms each
+[I][rs485_frame.discovery]: Baud sweep: trying 9600 baud, 8 data bits (candidate 1/5) for 10000 ms
+[I][rs485_frame.discovery]: Baud sweep result: 9600 baud 8 data bits -> framing confidence 0%, no CRC match, 0 frames
+...
+[I][rs485_frame.discovery]: Baud sweep result: 19200 baud 8 data bits -> framing confidence 100%, CRC matched, 431 frames
+[I][rs485_frame.discovery]: Baud sweep complete: locked to 19200 baud, 8 data bits (framing confidence 100%, CRC matched). Continuing discovery at these settings.
+```
+
+After the sweep locks, the normal framing/escape/CRC report follows, now prefixed with a
+ready-to-paste `uart:` snippet for the detected settings.
+
+**What the sweep can and cannot determine.** Passive listening can recover the **baud rate** and
+**data-bit width** reliably: a wrong value yields garbage that never frames or checksums, so it is
+rejected. It *cannot* determine **parity** or **stop bits**, because a receiver decodes a stream
+correctly even when its parity/stop settings disagree with the transmitter's (the parity bit is
+simply ignored on receive, and an extra stop bit is tolerated). The sweep therefore does not try
+them, and the suggested `uart:` snippet omits them — start with `parity: NONE` and `stop_bits: 1`.
+
+> [!NOTE]
+> Parity and stop bits only matter once you start **transmitting**. If commands you send are
+> ignored by the device even though receive and framing look correct, iterate the `uart:`
+> `parity:` and `stop_bits:` settings: try `parity: EVEN` then `parity: ODD`, and `stop_bits: 2`,
+> until the device responds. RS485 buses overwhelmingly use 8 data bits with either `NONE`/`1` or
+> `EVEN`/`1`; `stop_bits: 2` is the next most common. There are only a handful of combinations, so
+> a short manual sweep of the `uart:` block settles it.
+
+> [!NOTE]
+> `baud_sweep` needs runtime UART reconfiguration, which is implemented on ESP-IDF and ESP8266. On
+> other platforms the sweep is skipped and discovery runs at the `uart:` settings as configured.
 
 ### Step 3: Flash a passive sniffer
 
