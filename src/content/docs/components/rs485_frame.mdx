@@ -69,11 +69,12 @@ suppresses TX echo automatically; on Arduino, prefer `frame_trigger` or
 
 ## Basic usage
 
-Minimal Hayward AquaLogic configuration. User payload decoding is done via
-`on_frame:` on the hub — one lambda per frame type, pushing values to
-`platform: template` sensors. Hub diagnostics (frame counters, CRC failures,
-queue depth) are exposed through the `rs485_frame` sensor and text_sensor
-platforms.
+The following illustrates a Hayward AquaLogic wireless bus. The same structure applies to
+any DLE-framed bus — substitute the `uart:` settings, `framing.escape` scheme, `crc.type`,
+and `tx.gate.frame_type` for your controller. User payload decoding is done via `on_frame:`
+on the hub — one lambda per frame type, pushing values to `platform: template` sensors. Hub
+diagnostics (frame counters, CRC failures, queue depth) are exposed through the
+`rs485_frame` sensor and text_sensor platforms.
 
 ```yaml
 uart:
@@ -226,6 +227,7 @@ A general-purpose [Action](/guides/automations) you can invoke from anywhere —
 on_frame: triggers, template buttons, schedule entries. Both fields are templatable.
 
 ```yaml
+# Pool controller example: send a fixed AUX command frame from a script.
 script:
   - id: pulse_aux1
     then:
@@ -235,10 +237,10 @@ script:
           payload: [0x00, 0x01, 0x02, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00]
 
 # Computed payload via lambda — useful when the bytes depend on entity state, a
-# trigger argument, or any other runtime value.
+# trigger argument, or any other runtime value. Payload layout is protocol-specific.
 button:
   - platform: template
-    name: "Set Pool Setpoint"
+    name: "Set Pool Setpoint"   # pool controller example
     on_press:
       - rs485_frame.send_frame:
           id: pool
@@ -881,10 +883,16 @@ rate or UART settings. A small steady `crc_failures` alongside healthy
 
 ## Why buttons, not switches
 
-Commands are **buttons** because they are keypress events on the RS485 bus — the
-controller decides the resulting state. Read LED state through Home Assistant
-binary sensors driven by your `on_frame:` LED-mask handler for the ground truth
-on what is on or off.
+Each `rs485_frame` button sends a single frame event onto the bus. What the bus device
+does with it — and whether the device state changes — depends on the device. The ESP has
+no way to know the outcome from the send alone; the ground truth is in whatever response
+frame the bus emits afterwards. Read that state with `on_frame:` handlers and expose it
+through `platform: template` binary sensors; do not infer it from the fact that a command
+was sent.
+
+On Hayward AquaLogic this maps directly to pressing a physical panel key: the controller
+decides whether to change state, and the LED status frame that follows is the authoritative
+answer.
 
 ## See also
 

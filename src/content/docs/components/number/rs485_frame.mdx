@@ -39,6 +39,7 @@ number:
     step: 1
     unit_of_measurement: "%"
     lambda: |-
+      // encode x into the frame payload; byte layout is protocol-specific
       uint8_t pct = static_cast<uint8_t>(x);
       return std::vector<uint8_t>{0x0c, 0x01, 0x00, pct};
 ```
