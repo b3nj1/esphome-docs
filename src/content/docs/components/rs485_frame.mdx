@@ -333,23 +333,25 @@ of the device's.
 Configure the bus explicitly: set the `uart:` parameters your device uses, declare the
 `framing.escape` scheme, choose the `crc:` algorithm, set `tx.gate.frame_type` to the bus
 keep-alive / poll frame, and (only if you want the `command:` button shorthand or
-`tx.idle_command`) add a `command_format:`. The table below gives known-good explicit settings
-for some common buses; copy the relevant column into your hub config. Every bus listed uses
-`framing.escape: {mode: escape_byte, byte: 0x00}`. Ready-to-flash configurations are maintained
-in the [rs485_frame-examples repository](https://github.com/b3nj1/rs485_frame-examples).
+`tx.idle_command`) add a `command_format:`. To find those values:
 
-| Device | UART | `crc.type` | `tx.gate.frame_type` | `command_format` |
-|---|---|---|---|---|
-| Hayward AquaLogic wireless remote | 19200 8N2 | `sum16_big_endian` | `[0x01, 0x01]` | preamble `[0x00, 0x83, 0x01]`, size 4, repeat 2, postamble `[0x00]` |
-| Hayward AquaLogic wired remote | 19200 8N2 | `sum16_big_endian` | `[0x01, 0x01]` | preamble `[0x00, 0x03]`, size 4, repeat 2 |
-| Hayward AquaLogic wired local / main panel | 19200 8N2 | `sum16_big_endian` | `[0x01, 0x01]` | preamble `[0x00, 0x02]`, size 4, repeat 2 |
-| Jandy AquaLink RS AllButton | 9600 8N1 | `sum8`, `rx_accept: [header_inclusive]` | `[0x08, 0x00]` | preamble `[0x00, 0x01, 0x80]`, size 1 |
+- **Ready-to-flash configs** for Hayward AquaLogic and Jandy AquaLink RS (and a starting point
+  for contributing new ones) live in the
+  [rs485_frame-examples repository](https://github.com/b3nj1/rs485_frame-examples).
+- **Automatic discovery** — if you don't know your framing bytes yet, enable `discovery:` to
+  let the hub sniff them from the live bus (see [Getting started with an unknown bus](#getting-started-with-an-unknown-bus)).
+  Once framing is known, enable `sniffer_only: true` (see
+  [Step 3: Flash a passive sniffer](#step-3-flash-a-passive-sniffer)) to capture frame types before
+  committing to TX.
+- **Product and installer manuals** often list baud rate and frame format.
+- **Open-source reverse-engineering projects** for your controller family may have already
+  cataloged frame types, escape schemes, and CRC variants — a search turns up community
+  work for many pool, HVAC, and lighting controllers.
 
 > [!WARNING]
-> The Jandy AquaLink RS settings are community-contributed and **have not been verified on
-> physical hardware** — the AllButton ACK third byte (`0x80`) and the poll-cycle timing are
-> reverse-engineering guesses and may be wrong. Treat them as a starting point and confirm
-> against a live bus.
+> The Jandy AquaLink RS configurations in rs485_frame-examples are community-contributed and
+> **have not been verified on physical hardware** — the AllButton ACK byte and poll-cycle timing
+> are reverse-engineering guesses. Treat them as a starting point and confirm against a live bus.
 
 A Jandy AllButton emulator must also set `tx.idle_command` (typically `0x00`) unless
 `sniffer_only: true`: it has to ACK every probe within the poll cycle or the controller
@@ -419,30 +421,18 @@ marks it offline. `tx.idle_command` requires a `command_format:` (see below).
   - **postamble** (*Optional*, list of hex bytes): Bytes written after the last command
     repetition. Up to 8 bytes. Defaults to `[]` (none).
 
-  The four Hayward / Jandy formats as explicit `command_format:` blocks (each shows only this
-  block; combine with `framing`, `crc`, and `tx.gate` from the table above to form a valid hub):
+  Two representative formats (exercises the full range of fields). Per-device sets are in the
+  [rs485_frame-examples repository](https://github.com/b3nj1/rs485_frame-examples).
 
   ```yaml
-  # Hayward AquaLogic wireless remote (frame type 0x0083, 12-byte payload)
+  # Hayward AquaLogic wireless remote — preamble + repeat + postamble
   command_format:
     preamble: [0x00, 0x83, 0x01]   # frame sub-type + channel byte
     command_size: 4
     command_repeat: 2
     postamble: [0x00]              # trailing pad
 
-  # Hayward AquaLogic wired remote (frame type 0x0003, 10-byte payload)
-  command_format:
-    preamble: [0x00, 0x03]         # frame sub-type: registered wired remote
-    command_size: 4
-    command_repeat: 2
-
-  # Hayward AquaLogic wired local / main panel (frame type 0x0002, 10-byte payload)
-  command_format:
-    preamble: [0x00, 0x02]         # frame sub-type: main panel
-    command_size: 4
-    command_repeat: 2
-
-  # Jandy AquaLink RS AllButton ACK (4-byte payload)
+  # Jandy AquaLink RS AllButton ACK — minimal size-1 case
   command_format:
     preamble: [0x00, 0x01, 0x80]
     command_size: 1
@@ -586,19 +576,9 @@ bytes are still at the start.
 **Community references often use a different convention.** Some strip the
 frame_type before counting, so what they call "byte 0" of the frame is our
 `payload[2]`. When porting offsets from external research, add the
-`frame_type` length (usually 2) to translate.
-
-| Source | Their "byte 0" of the frame | Equivalent in our `payload[]` |
-|---|---|---|
-| **`rs485_frame`** (this component) | first byte of the frame_type | `payload[0]` |
-| [swilson/aqualogic](https://github.com/swilson/aqualogic) | first byte after frame_type | `payload[2]` (2-byte) |
-| [aquaweb](https://github.com/earlephilhower/aquaweb) | mixed; see source per field | translate per-field |
-| Raw bus capture (Wireshark, dump_frames log) | `DLE` itself | DLE+STX stripped before `payload[0]` |
-
-When publishing your own reverse-engineering findings, state the convention
-explicitly ("offsets are payload-relative: `payload[0..1]` = frame_type, data
-starts at `payload[2]`") — it costs one sentence and saves every reader an
-off-by-two debugging session.
+`frame_type` length (usually 2) to translate. Per-source translation notes and
+examples for common open-source projects are in
+[rs485_frame-examples CONTRIBUTING.md](https://github.com/b3nj1/rs485_frame-examples/blob/main/CONTRIBUTING.md).
 
 ## Getting started with an unknown bus
 
@@ -842,6 +822,10 @@ appears in the YAML — production builds pay no flash or RAM cost.
   by count. `0` (default) disables.
 - **reference_frame_type** (*Optional*, list of hex bytes): Frame type used as the `d-ref` timing reference. Defaults
   to `tx.gate.frame_type`.
+- **ascii_strip_high_bit** (*Optional*, boolean): When `true`, bit 7 is masked before the printable-range gate in
+  the hex+ASCII payload preview. Enable for display-frame buses that pack an attribute flag (e.g. blink/inverse) into
+  the high bit, so the underlying character renders instead of `'.'`. Leave `false` (default) on binary buses where
+  the high bit carries data — otherwise distinct values like `0x41` and `0xC1` would both print as `A`.
 
 Each tracked frame type holds `max_unique_payloads × payload_capture_bytes`
 of payload buffer plus small bookkeeping. With defaults of 32 frame types ×
