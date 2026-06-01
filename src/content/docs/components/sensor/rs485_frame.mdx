@@ -22,14 +22,14 @@ single bit-field LED mask through a multi-field temperature/text frame.
   decode value carries Home-Assistant-conformant defaults (state class, unit, and
   for `last_keepalive_ms` a device class) so you do not have to set them yourself:
 
-  | decode | Description | Defaults applied |
-  |---|---|---|
-  | `frames_received` | Running count of validated frames received. | `state_class: total_increasing`, `unit_of_measurement: frames` |
-  | `crc_failures` | Running count of frames that failed validation (CRC mismatch or structural). | `state_class: total_increasing`, `unit_of_measurement: frames` |
-  | `commands_sent` | Running count of user commands transmitted (idle keepalives are not counted). | `state_class: total_increasing`, `unit_of_measurement: commands` |
-  | `command_drops` | Running count of commands dropped (queue full or sniffer mode). | `state_class: total_increasing`, `unit_of_measurement: commands` |
-  | `last_keepalive_ms` | Measured interval between the two most recent gate frames, in ms. | `state_class: measurement`, `unit_of_measurement: ms`, `device_class: duration` |
-  | `queue_depth` | Current TX queue depth in commands (including any pending delayed frame). | `state_class: measurement`, `unit_of_measurement: commands` |
+  | decode | Description | `state_class` | `unit_of_measurement` | other |
+  |---|---|---|---|---|
+  | `frames_received` | Validated frames received. | `total_increasing` | `frames` | |
+  | `crc_failures` | Frames that failed validation (CRC or structural). | `total_increasing` | `frames` | |
+  | `commands_sent` | User commands transmitted (idle keepalives excluded). | `total_increasing` | `commands` | |
+  | `command_drops` | Commands dropped (queue full or sniffer mode). | `total_increasing` | `commands` | |
+  | `last_keepalive_ms` | Gate-frame interval in ms. | `measurement` | `ms` | `device_class: duration` |
+  | `queue_depth` | Current TX queue depth (including any pending delayed). | `measurement` | `commands` | |
 
 All other options from [Sensor](/components/sensor/#base-sensor-configuration).
 Every diagnostic also defaults to `entity_category: diagnostic`. You can override

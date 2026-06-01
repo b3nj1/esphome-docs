@@ -36,6 +36,11 @@ It helps to think of the setup as a three-stage pipeline:
 - **Your `on_frame:` lambdas and `command:` buttons** decode frame payloads into
   Home Assistant entities and produce outbound commands.
 
+> [!TIP]
+> Have a Hayward AquaLogic or Jandy AquaLink RS? Start with the ready-to-flash configurations in
+> the [rs485_frame-examples repository](https://github.com/b3nj1/rs485_frame-examples) — copy the
+> family's `example-device.yaml`, fill in your pins, uncomment the equipment you have, and flash.
+
 ## Recommended framework: ESP-IDF
 
 Use the **ESP-IDF framework**, not Arduino:
@@ -79,13 +84,13 @@ diagnostics (frame counters, CRC failures, queue depth) are exposed through the
 ```yaml
 uart:
   id: pool_uart
-  tx_pin: GPIO17
-  rx_pin: GPIO18
+  tx_pin: GPIOXX
+  rx_pin: GPIOXX
   baud_rate: 19200
   data_bits: 8
   parity: NONE
   stop_bits: 2
-  flow_control_pin: GPIO21  # DE/RE pin; omit if your adapter auto-manages direction
+  flow_control_pin: GPIOXX  # DE/RE pin; omit if your adapter auto-manages direction
 
 rs485_frame:
   id: pool
@@ -95,7 +100,7 @@ rs485_frame:
       mode: escape_byte   # Hayward stuffs a literal DLE as DLE + this byte
       byte: 0x00
   crc:
-    type: sum16
+    type: sum16_big_endian
   command_format:                 # required for the command: button shorthand below
     preamble: [0x00, 0x83, 0x01]  # Hayward AquaLogic wireless remote frame
     command_size: 4
@@ -179,8 +184,8 @@ like Jandy). To keep long-uptime devices stable, follow these patterns:
   only at the `publish_state(...)` call site.
 - **Prefer `static` buffers for anything larger than a few bytes.** A `static`
   buffer inside a lambda is BSS-allocated once at program start (the same
-  discipline the hub uses for its setup-time scratch buffers). Same memory
-  story as the hub, no per-call stack pressure, no heap. Example:
+  discipline the hub uses for its setup-time scratch buffers): no per-call
+  stack pressure and no heap. Example:
 
   ```cpp
   const size_t BUF_LEN = 128;   // sized to cover the widest payload you expect
@@ -300,9 +305,9 @@ RS485-to-TTL and an ESP32-S3. See the [UART](/components/uart/) component
 for wiring details.
 
 ```
-GPIO17 (TX) → DI  (adapter data-in)
-GPIO18 (RX) → RO  (adapter data-out)
-GPIO21      → DE + RE tied (half-duplex direction control)
+GPIOXX (TX) → DI  (adapter data-in)
+GPIOXX (RX) → RO  (adapter data-out)
+GPIOXX      → DE + RE tied (half-duplex direction control)
 DC Supply   → VCC (match adapter supply voltage)
 GND         → GND
 A / B       → RS485 bus terminals
@@ -316,7 +321,7 @@ automatically.
 
 ```yaml
 uart:
-  flow_control_pin: GPIO21  # DE/RE direction pin
+  flow_control_pin: GPIOXX  # DE/RE direction pin
 ```
 
 If you receive no data, try swapping `tx_pin`/`rx_pin` or the A/B bus wires.
@@ -333,12 +338,12 @@ for some common buses; copy the relevant column into your hub config. Every bus 
 `framing.escape: {mode: escape_byte, byte: 0x00}`. Ready-to-flash configurations are maintained
 in the [rs485_frame-examples repository](https://github.com/b3nj1/rs485_frame-examples).
 
-| Device | UART | `crc` | `tx.gate.frame_type` | `command_format` |
+| Device | UART | `crc.type` | `tx.gate.frame_type` | `command_format` |
 |---|---|---|---|---|
-| Hayward AquaLogic wireless remote | 19200 8N2 | `type: sum16` | `[0x01, 0x01]` | preamble `[0x00, 0x83, 0x01]`, size 4, repeat 2, postamble `[0x00]` |
-| Hayward AquaLogic wired remote | 19200 8N2 | `type: sum16` | `[0x01, 0x01]` | preamble `[0x00, 0x03]`, size 4, repeat 2 |
-| Hayward AquaLogic wired local / main panel | 19200 8N2 | `type: sum16` | `[0x01, 0x01]` | preamble `[0x00, 0x02]`, size 4, repeat 2 |
-| Jandy AquaLink RS AllButton | 9600 8N1 | `type: sum8`, `rx_accept: [header_inclusive]` | `[0x08, 0x00]` | preamble `[0x00, 0x01, 0x80]`, size 1 |
+| Hayward AquaLogic wireless remote | 19200 8N2 | `sum16_big_endian` | `[0x01, 0x01]` | preamble `[0x00, 0x83, 0x01]`, size 4, repeat 2, postamble `[0x00]` |
+| Hayward AquaLogic wired remote | 19200 8N2 | `sum16_big_endian` | `[0x01, 0x01]` | preamble `[0x00, 0x03]`, size 4, repeat 2 |
+| Hayward AquaLogic wired local / main panel | 19200 8N2 | `sum16_big_endian` | `[0x01, 0x01]` | preamble `[0x00, 0x02]`, size 4, repeat 2 |
+| Jandy AquaLink RS AllButton | 9600 8N1 | `sum8`, `rx_accept: [header_inclusive]` | `[0x08, 0x00]` | preamble `[0x00, 0x01, 0x80]`, size 1 |
 
 > [!WARNING]
 > The Jandy AquaLink RS settings are community-contributed and **have not been verified on
@@ -383,8 +388,9 @@ marks it offline. `tx.idle_command` requires a `command_format:` (see below).
 - **crc** (**Required**): CRC algorithm configuration. There is no cross-bus default, so this
   block (and its `type`) must be set explicitly.
 
-  - **type** (**Required**, string): `none`, `sum8`, `sum16`, `xor8`, or `crc16_modbus`. Use
-    `none` to accept any structurally valid frame (e.g. while discovering an unknown bus).
+  - **type** (**Required**, string): `none`, `sum8`, `sum16_big_endian`, `sum16_little_endian`,
+    `xor8`, or `crc16_modbus`. Use `none` to accept any structurally valid frame (e.g. while
+    discovering an unknown bus).
   - **rx_accept** (*Optional*, list): CRC variants accepted on RX — `header_inclusive`,
     `payload_only`, or both. Defaults to both.
   - **tx_variant** (*Optional*, string): CRC variant used when building outbound frames. Defaults to `header_inclusive`.
@@ -413,7 +419,8 @@ marks it offline. `tx.idle_command` requires a `command_format:` (see below).
   - **postamble** (*Optional*, list of hex bytes): Bytes written after the last command
     repetition. Up to 8 bytes. Defaults to `[]` (none).
 
-  The four Hayward / Jandy formats as explicit blocks:
+  The four Hayward / Jandy formats as explicit `command_format:` blocks (each shows only this
+  block; combine with `framing`, `crc`, and `tx.gate` from the table above to form a valid hub):
 
   ```yaml
   # Hayward AquaLogic wireless remote (frame type 0x0083, 12-byte payload)
@@ -584,9 +591,9 @@ frame_type before counting, so what they call "byte 0" of the frame is our
 | Source | Their "byte 0" of the frame | Equivalent in our `payload[]` |
 |---|---|---|
 | **`rs485_frame`** (this component) | first byte of the frame_type | `payload[0]` |
-| [swilson/aqualogic](https://github.com/swilson/aqualogic) | first byte **after** the frame_type | `payload[2]` (for 2-byte frame_type) |
-| [earlephilhower/aquaweb](https://github.com/earlephilhower/aquaweb) | mixed; see the Python source for each frame | translate per-field |
-| Raw bus capture (Wireshark, dump_frames log) | `DLE` itself | DLE+STX are stripped before `payload[0]` |
+| [swilson/aqualogic](https://github.com/swilson/aqualogic) | first byte after frame_type | `payload[2]` (2-byte) |
+| [aquaweb](https://github.com/earlephilhower/aquaweb) | mixed; see source per field | translate per-field |
+| Raw bus capture (Wireshark, dump_frames log) | `DLE` itself | DLE+STX stripped before `payload[0]` |
 
 When publishing your own reverse-engineering findings, state the convention
 explicitly ("offsets are payload-relative: `payload[0..1]` = frame_type, data
@@ -622,7 +629,7 @@ rs485_frame:
 [I][rs485_frame.discovery]: RS485 discovery (cumulative since boot): 412 bursts, 431 frames extracted
 [I][rs485_frame.discovery]:   Framing: DLE=0x10 STX=0x02 ETX=0x03  (confidence 100%, start pair x412, end pair x412 of 412 bursts)
 [I][rs485_frame.discovery]:   Escape: escape_byte 0x00 - 100% of 37 in-frame DLEs
-[I][rs485_frame.discovery]:   CRC match: sum16 header_inclusive big-endian (unescaped) - 431/431 frames
+[I][rs485_frame.discovery]:   CRC match: sum16_big_endian header_inclusive (unescaped) - 431/431 frames
 [I][rs485_frame.discovery]:   Suggested framing/escape config:
 [I][rs485_frame.discovery]:     framing:
 [I][rs485_frame.discovery]:       dle: 0x10
@@ -825,11 +832,16 @@ appears in the YAML — production builds pay no flash or RAM cost.
 #### Sniffer-stats configuration variables
 
 - **interval** (*Optional*, [Time](/guides/configuration-types#time)): How often to log the table. Defaults to `30s`.
-- **max_frame_types** (*Optional*, integer, 1–64): Maximum distinct frame types tracked. Frame types past this cap are counted as "dropped events" and logged after the table. Defaults to `32`.
-- **max_unique_payloads** (*Optional*, integer, 1–64): Distinct payloads remembered per frame type during one dump period. Additional unique payloads beyond this cap are counted in the `+N` overflow. Defaults to `16`.
-- **payload_capture_bytes** (*Optional*, integer, 1–256): Maximum payload bytes captured per unique sample. Longer payloads are truncated at this length for uniqueness comparison and hex/ASCII display. Defaults to `32`.
-- **payload_dump_top** (*Optional*, integer, 0–32): After the table, dump captured hex+ASCII payloads for the top N frame types by count. `0` (default) disables.
-- **reference_frame_type** (*Optional*, list of hex bytes): Frame type used as the timing reference for the `d-ref` column. Defaults to `tx.gate.frame_type`.
+- **max_frame_types** (*Optional*, integer, 1–64): Maximum distinct frame types tracked. Frame types past this cap are
+  counted as "dropped events" and logged after the table. Defaults to `32`.
+- **max_unique_payloads** (*Optional*, integer, 1–64): Distinct payloads remembered per frame type during one dump
+  period. Additional unique payloads beyond this cap are counted in the `+N` overflow. Defaults to `16`.
+- **payload_capture_bytes** (*Optional*, integer, 1–255): Maximum payload bytes captured per unique sample. Longer
+  payloads are truncated at this length for uniqueness comparison and hex/ASCII display. Defaults to `32`.
+- **payload_dump_top** (*Optional*, integer, 0–32): After the table, dump hex+ASCII payloads for the top N frame types
+  by count. `0` (default) disables.
+- **reference_frame_type** (*Optional*, list of hex bytes): Frame type used as the `d-ref` timing reference. Defaults
+  to `tx.gate.frame_type`.
 
 Each tracked frame type holds `max_unique_payloads × payload_capture_bytes`
 of payload buffer plus small bookkeeping. With defaults of 32 frame types ×
@@ -842,14 +854,14 @@ The `rs485_frame` sensor and text_sensor platforms expose hub-state diagnostics
 as Home Assistant entities. They do **not** decode user payloads — for that, use
 `on_frame:`.
 
-| sensor `decode` | Description | Defaults applied |
-|---|---|---|
-| `frames_received` | Running count of validated frames received | `state_class: total_increasing`, `unit_of_measurement: frames` |
-| `crc_failures` | Running count of frames that failed validation (CRC or structural) | `state_class: total_increasing`, `unit_of_measurement: frames` |
-| `commands_sent` | Running count of user commands transmitted (idle keepalives are not counted) | `state_class: total_increasing`, `unit_of_measurement: commands` |
-| `command_drops` | Running count of commands dropped (queue full or sniffer mode) | `state_class: total_increasing`, `unit_of_measurement: commands` |
-| `last_keepalive_ms` | Measured interval between the two most recent gate frames, in ms | `state_class: measurement`, `unit_of_measurement: ms`, `device_class: duration` |
-| `queue_depth` | Current TX queue depth (including any pending delayed frame) | `state_class: measurement`, `unit_of_measurement: frames` |
+| sensor `decode` | Description | `state_class` | `unit_of_measurement` | other |
+|---|---|---|---|---|
+| `frames_received` | Validated frames received. | `total_increasing` | `frames` | |
+| `crc_failures` | Frames that failed validation (CRC or structural). | `total_increasing` | `frames` | |
+| `commands_sent` | User commands transmitted (idle keepalives excluded). | `total_increasing` | `commands` | |
+| `command_drops` | Commands dropped (queue full or sniffer mode). | `total_increasing` | `commands` | |
+| `last_keepalive_ms` | Gate-frame interval in ms. | `measurement` | `ms` | `device_class: duration` |
+| `queue_depth` | Current TX queue depth (including any pending delayed). | `measurement` | `commands` | |
 
 All diagnostic sensors are emitted with `entity_category: diagnostic` so Home
 Assistant groups them under the device's Diagnostic section. You can override
